@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  qpl:
+    build: .
+    container_name: quantum-portfolio-lab
+    ports:
+      - "8080:8080"
+    environment:
+      QPL_DEMO_MODE: "0"
+      QPL_DEBUG: "0"
+      QPL_PORT: "8080"
+      QPL_LOG_DIR: "/app/logs"
+      QPL_DATA_DIR: "/app/data"
+    volumes:
+      - qpl-data:/app/data
+      - qpl-logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  qpl-data:
+  qpl-logs:

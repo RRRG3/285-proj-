@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>285 Software Engineering Processes</title>
+    <meta name="description" content="A friendly stock portfolio suggestion engine with real-time valuation, backtesting, and what-if analysis.">
+    <meta name="theme-color" content="#0a1424">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="qpl-body">
+    <div class="terminal-grid-bg"></div>
+    <div class="ambient-orb orb-a" aria-hidden="true"></div>
+    <div class="ambient-orb orb-b" aria-hidden="true"></div>
+    <div class="ambient-orb orb-c" aria-hidden="true"></div>
+    <div class="noise-overlay" aria-hidden="true"></div>
+    <div id="cursorGlow" aria-hidden="true"></div>
+
+    <header class="top-ribbon">
+        <div class="ribbon-brand">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span class="brand-name">285 Project SEP</span>
+        </div>
+        <div class="ribbon-tape">
+            <div class="ribbon-track" id="ribbonTrack">
+                <span>Loading live market tape...</span>
+            </div>
+        </div>
+        <button type="button" class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+            <span class="theme-icon" aria-hidden="true">◐</span>
+        </button>
+        <button type="button" class="mobile-form-toggle" id="mobileFormToggle" aria-expanded="true">
+            <span aria-hidden="true">⚙</span>
+            <span class="mobile-form-toggle-text">Build</span>
+        </button>
+    </header>
+
+    <div class="workspace">
+        <aside class="left-dock" id="leftDock">
+            <section class="hero reveal-target">
+                <div class="hero-badge">Build · Track · Tweak</div>
+                <h1>Your $5,000 — actually allocated.</h1>
+                <p class="subtitle">
+                    Pick how you want to invest. We'll suggest a real portfolio with live prices,
+                    backtests, and a what-if workbench you can drag.
+                </p>
+                <ol class="hero-steps">
+                    <li><span>1</span> Enter an amount</li>
+                    <li><span>2</span> Pick a strategy</li>
+                    <li><span>3</span> Tweak &amp; track</li>
+                </ol>
+            </section>
+
+            <section class="input-section reveal-target">
+                <form id="portfolioForm">
+                    <div class="form-group">
+                        <label for="investmentAmount">Investment Amount (USD)</label>
+                        <input type="number" id="investmentAmount" name="amount" min="5000" step="100"
+                            placeholder="Enter amount (minimum $5,000)" required inputmode="numeric">
+                        <div class="amount-helper" id="amountHelper">Minimum $5,000.</div>
+                        <div class="preset-row" id="presetRow" role="group" aria-label="Risk presets">
+                            <button type="button" class="preset-btn" data-preset="conservative">Conservative</button>
+                            <button type="button" class="preset-btn" data-preset="balanced">Balanced</button>
+                            <button type="button" class="preset-btn" data-preset="aggressive">Aggressive</button>
+                        </div>
+                        <div class="demo-mode-row">
+                            <label class="switch-label" for="demoModeToggle">Demo Mode Fallback</label>
+                            <input
+                                type="checkbox"
+                                id="demoModeToggle"
+                                {% if demo_mode_enabled %}checked{% endif %}
+                            >
+                            <span class="demo-status" id="demoModeStatus">
+                                {{ "Enabled" if demo_mode_enabled else "Disabled" }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="form-group" id="riskProfileGroup">
+                        <label class="form-group-label">About You <span class="form-group-hint">(optional — tilts the model)</span></label>
+                        <div class="risk-profile-grid">
+                            <div class="risk-q">
+                                <label for="riskAge">Age</label>
+                                <input type="number" id="riskAge" min="18" max="99" step="1" placeholder="e.g. 28">
+                            </div>
+                            <div class="risk-q">
+                                <label for="riskHorizon">Years until you need it</label>
+                                <input type="number" id="riskHorizon" min="1" max="50" step="1" placeholder="e.g. 15">
+                            </div>
+                            <div class="risk-q">
+                                <label for="riskTolerance">Max drawdown you can stomach (%)</label>
+                                <input type="number" id="riskTolerance" min="5" max="60" step="1" placeholder="e.g. 25">
+                            </div>
+                        </div>
+                        <div class="risk-profile-result" id="riskProfileResult"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-group-label">Pick One or Two Strategies</label>
+                        <div class="strategies-grid">
+                            {% for strategy_name, strategy_info in strategy_data.items() %}
+                            <div class="strategy-card" data-strategy="{{ strategy_name }}" role="checkbox" aria-checked="false" tabindex="0">
+                                <input type="checkbox" name="strategy" value="{{ strategy_name }}"
+                                    id="strategy-{{ loop.index }}" tabindex="-1" aria-hidden="true">
+                                <div class="strategy-header">
+                                    <span class="checkbox-custom" aria-hidden="true"></span>
+                                    <span class="strategy-name">{{ strategy_name }}</span>
+                                </div>
+                                <div class="strategy-description">{{ strategy_info.description }}</div>
+                                <div class="strategy-tickers" aria-label="Holdings preview">
+                                    {% for stock in strategy_info.stocks %}
+                                    <span class="ticker-chip">{{ stock.ticker }}</span>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <button type="submit" class="generate-btn" id="generateBtn">
+                        Run Portfolio Model
+                    </button>
+
+                    <div class="error-message" id="errorMessage"></div>
+                </form>
+            </section>
+
+            <section class="methodology-panel reveal-target">
+                <details class="methodology-details">
+                    <summary>How this works</summary>
+                    <p>
+                        We size each holding by conviction divided by its volatility, so high-confidence + low-noise
+                        names get more capital. Backtests, drift alerts, and the Monte Carlo cone are computed from
+                        live market history — no hand-tuned numbers.
+                    </p>
+                </details>
+                <div class="saved-portfolios" id="savedPortfoliosBlock">
+                    <div class="saved-portfolios-title">Saved Portfolios</div>
+                    <div class="saved-list" id="savedList">
+                        <div class="saved-empty">Loading…</div>
+                    </div>
+                </div>
+            </section>
+        </aside>
+
+        <main class="right-dock">
+            <section class="results-section" id="resultsSection">
+                <div class="results-header reveal-target gradient-border">
+                    <div class="results-header-top">
+                        <div>
+                            <div class="value-label">Current Portfolio Value</div>
+                            <div class="portfolio-value" id="portfolioValue">$0.00</div>
+                        </div>
+                        <div class="live-indicator" id="liveIndicator" aria-live="polite">
+                            <span class="live-dot" aria-hidden="true"></span>
+                            <span class="live-label" id="liveLabel">Live</span>
+                        </div>
+                    </div>
+                    <div class="meta-grid">
+                        <p class="meta-line">
+                            <span class="meta-key">Strategies</span>
+                            <span id="selectedStrategies">—</span>
+                        </p>
+                        <p class="meta-line">
+                            <span class="meta-key">Method</span>
+                            <span id="allocationMethod">—</span>
+                        </p>
+                        <p class="meta-line" id="refreshStatus">
+                            <span class="meta-key">Auto-refresh</span>
+                            <span>idle</span>
+                        </p>
+                        <p class="meta-line" id="lastUpdatedLine">
+                            <span class="meta-key">Last update</span>
+                            <span>—</span>
+                        </p>
+                        <p class="meta-line" id="sourceBadgeLine">
+                            <span class="meta-key">Sources</span>
+                            <span>—</span>
+                        </p>
+                    </div>
+                    <div class="header-actions">
+                        <button type="button" class="action-btn" id="shareBtn">Copy share link</button>
+                        <button type="button" class="action-btn" id="exportCsvBtn">Download CSV</button>
+                        <button type="button" class="action-btn" id="exportPdfBtn">Download PDF</button>
+                    </div>
+                </div>
+
+                <nav class="results-tabs" id="resultsTabs" role="tablist" aria-label="Portfolio sections">
+                    <button type="button" class="results-tab active" role="tab" aria-selected="true" data-tab="overview">Overview</button>
+                    <button type="button" class="results-tab" role="tab" aria-selected="false" data-tab="performance">Performance</button>
+                    <button type="button" class="results-tab" role="tab" aria-selected="false" data-tab="risk">Risk &amp; Diversification</button>
+                    <button type="button" class="results-tab" role="tab" aria-selected="false" data-tab="whatif">What-If</button>
+                    <button type="button" class="results-tab" role="tab" aria-selected="false" data-tab="compare">Compare</button>
+                    <button type="button" class="results-tab" role="tab" aria-selected="false" data-tab="data">Data &amp; Ops</button>
+                </nav>
+
+                <!-- ===================== OVERVIEW TAB ===================== -->
+                <div class="tab-pane active" data-tab-pane="overview" role="tabpanel">
+                    <article class="analysis-panel narrative-panel reveal-target" id="narrativePanel" style="display:none;">
+                        <h2 class="section-heading">In Plain English</h2>
+                        <p class="narrative-headline" id="narrativeHeadline"></p>
+                        <ul class="narrative-bullets" id="narrativeBullets"></ul>
+                    </article>
+
+                    <h2 class="section-heading">Portfolio Snapshot</h2>
+                    <div class="metrics-grid" id="metricsGrid">
+                        <article class="metric-card reveal-target">
+                            <h3>Invested Capital</h3>
+                            <p id="metricInvested">$0.00</p>
+                        </article>
+                        <article class="metric-card reveal-target">
+                            <h3>Cash Remainder</h3>
+                            <p id="metricCash">$0.00</p>
+                        </article>
+                        <article class="metric-card reveal-target">
+                            <h3>Unrealized PnL</h3>
+                            <p id="metricPnL">$0.00</p>
+                        </article>
+                        <article class="metric-card reveal-target">
+                            <h3>Return</h3>
+                            <p id="metricReturn">0.00%</p>
+                        </article>
+                        <article class="metric-card reveal-target">
+                            <h3>Diversification Score</h3>
+                            <p id="metricDiversification">0.00</p>
+                        </article>
+                        <article class="metric-card reveal-target">
+                            <h3>Largest Position</h3>
+                            <p id="metricLargest">-</p>
+                        </article>
+                    </div>
+
+                    <article class="analysis-panel action-plan-panel reveal-target" id="actionPlanPanel" style="display:none;">
+                        <h2 class="section-heading">Action Plan</h2>
+                        <p class="panel-subtitle" id="actionPlanSummary"></p>
+                        <ol class="action-plan-list" id="actionPlanList"></ol>
+                        <p class="panel-subtitle action-plan-hint" id="actionPlanHint"></p>
+                    </article>
+
+                    <h2 class="section-heading">Holdings</h2>
+                    <div class="allocations-grid" id="allocationsGrid"></div>
+
+                    <div class="chart-container reveal-target">
+                        <h2 class="chart-title">5-Day Portfolio Trend</h2>
+                        <canvas id="portfolioChart"></canvas>
+                    </div>
+
+                    <article class="analysis-panel reveal-target">
+                        <h2 class="section-heading">Rebalancing Recommendations</h2>
+                        <p class="panel-subtitle" id="rebalanceSummary"></p>
+                        <div class="rebalance-list" id="rebalanceList"></div>
+                    </article>
+                </div>
+
+                <!-- ===================== PERFORMANCE TAB ===================== -->
+                <div class="tab-pane" data-tab-pane="performance" role="tabpanel" hidden>
+                    <section class="analysis-panel reveal-target">
+                        <h2 class="section-heading">Portfolio vs Benchmarks (30D)</h2>
+                        <canvas id="comparisonChart"></canvas>
+                        <div class="mini-chart-grid">
+                            <article class="mini-chart-card">
+                                <h3>Drawdown (Portfolio)</h3>
+                                <canvas id="drawdownChart"></canvas>
+                            </article>
+                            <article class="mini-chart-card">
+                                <h3>Rolling Sharpe (10D)</h3>
+                                <canvas id="rollingSharpeChart"></canvas>
+                            </article>
+                        </div>
+                    </section>
+
+                    <section class="analysis-grid">
+                        <article class="analysis-panel reveal-target">
+                            <h2 class="section-heading">Benchmark Comparison</h2>
+                            <div class="period-tabs" id="benchmarkPeriodTabs"></div>
+                            <div class="table-wrap">
+                                <table class="comparison-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Model</th>
+                                            <th>Return</th>
+                                            <th>Volatility</th>
+                                            <th>Sharpe</th>
+                                            <th>Drawdown</th>
+                                            <th>Alpha</th>
+                                            <th>Beta</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="benchmarkTableBody"></tbody>
+                                </table>
+                            </div>
+                        </article>
+
+                        <article class="analysis-panel reveal-target">
+                            <h2 class="section-heading">Backtest (1Y / 3Y / 5Y)</h2>
+                            <p class="panel-subtitle" id="backtestConfigText"></p>
+                            <div class="backtest-grid" id="backtestGrid"></div>
+                        </article>
+                    </section>
+                </div>
+
+                <!-- ===================== RISK TAB ===================== -->
+                <div class="tab-pane" data-tab-pane="risk" role="tabpanel" hidden>
+                    <section class="analysis-grid">
+                        <article class="analysis-panel reveal-target">
+                            <h2 class="section-heading">Why This Portfolio?</h2>
+                            <p class="panel-subtitle" id="riskProfileLine"></p>
+                            <p class="panel-subtitle" id="explainabilitySummary"></p>
+                            <ul class="explainability-list" id="explainabilityDrivers"></ul>
+                            <p class="panel-subtitle" id="methodologyLine"></p>
+                        </article>
+
+                        <article class="analysis-panel reveal-target">
+                            <h2 class="section-heading">Execution &amp; Risk Controls</h2>
+                            <div class="quality-grid" id="riskControlGrid"></div>
+                            <p class="panel-subtitle" id="riskControlSummary"></p>
+                            <ul class="explainability-list" id="riskBreachList"></ul>
+                        </article>
+                    </section>
+
+                    <section class="analysis-grid">
+                        <article class="analysis-panel reveal-target">
+                            <h2 class="section-heading">Allocation Breakdown</h2>
+                            <canvas id="allocationDonutChart"></canvas>
+                        </article>
+                        <article class="analysis-panel reveal-target">
+                            <h2 class="section-heading">Sector Exposure</h2>
+                            <canvas id="sectorDonutChart"></canvas>
+                        </article>
+                    </section>
+
+                    <article class="analysis-panel reveal-target">
+                        <h2 class="section-heading">Correlation Matrix</h2>
+                        <p class="panel-subtitle" id="correlationStatus"></p>
+                        <div class="correlation-heatmap-wrap" id="correlationHeatmap"></div>
+                    </article>
+
+                    <article class="analysis-panel reveal-target" id="stressTestsPanel">
+                        <h2 class="section-heading">Stress Tests</h2>
+                        <p class="panel-subtitle" id="stressTestsSummary">Historical regimes and hypothetical shocks applied to your current holdings.</p>
+                        <div class="stress-grid" id="stressGrid"></div>
+                    </article>
+                </div>
+
+                <!-- ===================== WHAT-IF TAB ===================== -->
+                <div class="tab-pane" data-tab-pane="whatif" role="tabpanel" hidden>
+                    <article class="analysis-panel reveal-target">
+                        <h2 class="section-heading">Monte Carlo Simulation (1Y Forecast)</h2>
+                        <p class="panel-subtitle" id="monteCarloStatus"></p>
+                        <canvas id="monteCarloChart"></canvas>
+                        <div class="quality-grid" id="monteCarloStats"></div>
+                    </article>
+
+                    <section class="analysis-grid">
+                        <article class="analysis-panel goal-tracker-panel reveal-target" id="goalTrackerPanel">
+                            <h2 class="section-heading">Goal Tracker</h2>
+                            <p class="panel-subtitle">Set a target value and date — we'll estimate the probability of getting there using your portfolio's Monte Carlo distribution.</p>
+                            <form class="goal-form" id="goalTrackerForm">
+                                <div class="goal-form-row">
+                                    <label for="goalTargetValue">Target value (USD)</label>
+                                    <input type="number" id="goalTargetValue" min="0" step="100" placeholder="e.g. 25000" required>
+                                </div>
+                                <div class="goal-form-row">
+                                    <label for="goalTargetYears">Time horizon (years)</label>
+                                    <input type="number" id="goalTargetYears" min="0.25" max="30" step="0.25" placeholder="e.g. 5" required>
+                                </div>
+                                <button type="submit" class="action-btn primary" id="goalTrackerSubmit">Estimate probability</button>
+                            </form>
+                            <div class="goal-result" id="goalResult" style="display:none;">
+                                <div class="goal-prob-headline" id="goalProbHeadline"></div>
+                                <p class="panel-subtitle" id="goalProbDetail"></p>
+                                <div class="quality-grid" id="goalStats"></div>
+                            </div>
+                        </article>
+
+                        <article class="analysis-panel tweak-workbench-panel reveal-target" id="tweakWorkbenchPanel">
+                            <h2 class="section-heading">Tweak Workbench</h2>
+                            <p class="panel-subtitle" id="tweakStatus">Drag the sliders to test "what-if" weights. Metrics recompute live from the past ~2 years of returns and the covariance matrix.</p>
+                            <div class="tweak-metrics" id="tweakMetrics"></div>
+                            <div class="tweak-sliders" id="tweakSliders"></div>
+                            <div class="tweak-actions">
+                                <button type="button" class="action-btn" id="tweakResetBtn">Reset to model</button>
+                                <button type="button" class="action-btn" id="tweakEqualizeBtn">Equal weight</button>
+                            </div>
+                        </article>
+                    </section>
+                </div>
+
+                <!-- ===================== COMPARE TAB ===================== -->
+                <div class="tab-pane" data-tab-pane="compare" role="tabpanel" hidden>
+                    <article class="analysis-panel reveal-target">
+                        <h2 class="section-heading">Compare Two Strategies</h2>
+                        <p class="panel-subtitle">Side-by-side risk &amp; return for the same dollar amount across two strategies — useful before committing.</p>
+                        <form class="compare-form" id="compareForm">
+                            <div class="compare-side">
+                                <h3>Strategy A</h3>
+                                <select id="compareSelectA" required>
+                                    {% for strategy_name in strategy_data.keys() %}
+                                    <option value="{{ strategy_name }}">{{ strategy_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="compare-side">
+                                <h3>Strategy B</h3>
+                                <select id="compareSelectB" required>
+                                    {% for strategy_name in strategy_data.keys() %}
+                                    <option value="{{ strategy_name }}">{{ strategy_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </form>
+                        <button type="button" class="action-btn primary" id="compareRunBtn">Run side-by-side</button>
+                        <div class="compare-results" id="compareResults" style="margin-top:1.2rem;"></div>
+                    </article>
+                </div>
+
+                <!-- ===================== DATA TAB ===================== -->
+                <div class="tab-pane" data-tab-pane="data" role="tabpanel" hidden>
+                    <article class="analysis-panel reveal-target">
+                        <h2 class="section-heading">Data Quality &amp; Reliability</h2>
+                        <div class="quality-grid" id="qualityGrid"></div>
+                        <p class="panel-subtitle" id="qualityWarnings"></p>
+                    </article>
+
+                    <article class="analysis-panel reveal-target">
+                        <h2 class="section-heading">Operations Monitoring</h2>
+                        <div class="quality-grid" id="opsGrid"></div>
+                        <p class="panel-subtitle" id="opsSummary"></p>
+                        <canvas id="opsTrendChart"></canvas>
+                        <p class="panel-subtitle">Active Alerts</p>
+                        <ul class="explainability-list" id="opsAlerts"></ul>
+                        <p class="panel-subtitle">Recent Errors</p>
+                        <ul class="explainability-list" id="opsErrors"></ul>
+                    </article>
+                </div>
+
+            </section>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
