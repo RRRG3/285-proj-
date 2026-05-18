@@ -77,13 +77,14 @@ pip install -r requirements.txt
 
 # Run (demo mode = offline, deterministic prices)
 QPL_DEMO_MODE=1 python app.py
-# → http://127.0.0.1:5000
+# → http://127.0.0.1:8080
 ```
 
 Or with Docker:
 
 ```bash
 docker compose up
+# → http://127.0.0.1:8080
 ```
 
 First-time visitors get a 5-step interactive tour. Dismiss it once and it stays dismissed.
@@ -290,78 +291,115 @@ Modules with 90%+ coverage: `risk_model`, `schemas`, `observability`, `alerting`
 
 ## 10 Detailed Test Cases
 
-Below are 10 step-by-step test cases a grader can follow to verify the project's core functions. **Setup:** run the app with `QPL_DEMO_MODE=1 python app.py` and open `http://127.0.0.1:5000` in a browser.
+Below are 10 step-by-step test cases a grader can follow to verify the project's core functions.
 
-### Test Case 1: Generate a Portfolio with Valid Input
+### Grading setup
 
-1. Enter `10000` in the investment amount field.
-2. Select one strategy (e.g., "Tech Giants").
-3. Click **Generate Portfolio**.
-4. **Expected:** The results panel appears showing a total value of $10,000.00, a list of stock allocations with ticker symbols, share counts, and dollar amounts that sum to ~$10,000.
+**Requirements:** Python 3.10+, pip
 
-### Test Case 2: Minimum Investment Amount Validation
+1. Unzip the project and open a terminal in the project folder.
+2. Create a virtual environment and install dependencies:
 
-1. Enter `50` in the investment amount field (below the $100 minimum).
-2. Select one strategy.
-3. Click **Generate Portfolio**.
-4. **Expected:** An error message appears: "Investment amount must be at least $100." No portfolio is generated.
+```bash
+python3 -m venv venv
+source venv/bin/activate    # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-### Test Case 3: Strategy Selection Limit
+3. Start the app in **demo mode** (stable prices; works offline):
 
-1. Enter `5000` in the investment amount field.
-2. Select more than 3 strategies (click 4 strategy cards).
-3. **Expected:** The UI prevents selecting more than 3 strategies, or displays a validation message that at most 3 strategies can be combined.
+```bash
+QPL_DEMO_MODE=1 python app.py
+```
+
+4. Open a browser at **`http://127.0.0.1:8080`**.
+5. (Optional) Enable the **Demo Mode Fallback** checkbox in the left panel if quotes fail.
+6. Dismiss the onboarding tour if it appears.
+
+**Docker alternative:** `docker compose up` → open `http://127.0.0.1:8080`
+
+### Test Case 1: Generate Portfolio (Core Spec)
+
+1. Enter `10000` in **Investment Amount (USD)**.
+2. Click the strategy card **Growth Investing** (one strategy only).
+3. Click **Run Portfolio Model**.
+4. **Expected:** Results appear on the right. **Current Portfolio Value** is approximately **$10,000.00**. **Holdings** lists tickers (e.g. TSLA, NVDA, AMZN, META) with **shares**, **weight %**, and **dollar amounts** that sum to approximately $10,000. The **Strategies** meta line shows `Growth Investing`.
+
+### Test Case 2: Minimum Investment Validation ($5,000)
+
+1. Enter `3000` in the investment field.
+2. Select **Index Investing**.
+3. Click **Run Portfolio Model**.
+4. **Expected:** Error message: **Minimum investment amount is $5,000.** No portfolio results panel.
+
+### Test Case 3: Strategy Selection Limit (1–2 Strategies)
+
+1. Enter `5000`.
+2. Click **Ethical Investing**, then **Value Investing** (two selected).
+3. Try to click a third strategy (e.g. **Quality Investing**).
+4. **Expected:** Third selection is blocked; error: **You can select a maximum of 2 investment strategies.**
+5. With only two selected, click **Run Portfolio Model**.
+6. **Expected:** Holdings combine tickers from both strategies (deduplicated), with at least **3** positions.
 
 ### Test Case 4: Risk Profile Adjusts Allocation
 
-1. Enter `10000` and select "Dividend Aristocrats."
-2. Answer risk profile questions: set age to 60, horizon to "Short (1–3 years)," drawdown tolerance to "Low."
-3. Click **Generate Portfolio**.
-4. **Expected:** The allocation shows a higher cash/bond buffer (conservative tilt). Compare with a profile of age 25, long horizon, high tolerance — the younger profile should show less cash buffer and more equity concentration.
+**Run A — conservative:**
 
-### Test Case 5: Weekly Trend Chart Displays Correctly
+1. Enter `10000`, select **Quality Investing**.
+2. Under **About You**, set Age `65`, Years until you need it `3`, Max drawdown `10`.
+3. Click **Run Portfolio Model**.
+4. Note **Cash Remainder** on Overview and the risk label pill (e.g. Conservative).
 
-1. Generate any portfolio (e.g., $10,000, "Growth" strategy).
-2. Navigate to the **Overview** tab.
-3. Look at the 5-day price trend chart.
-4. **Expected:** A Chart.js line chart renders showing price movement over the last 5 trading days for each holding. Hovering over data points shows the ticker and price value in a tooltip.
+**Run B — aggressive:**
+
+5. Keep `10000` and **Quality Investing**.
+6. Under **About You**, set Age `25`, Years until you need it `25`, Max drawdown `50`.
+7. Generate again.
+8. **Expected:** Run B has a **lower cash remainder** and/or **more concentrated** top weights than Run A. The results header shows a risk label pill (e.g. Conservative vs Aggressive).
+
+### Test Case 5: Five-Day Portfolio Trend (Weekly History)
+
+1. Generate `10000` with **Index Investing**.
+2. Stay on the **Overview** tab.
+3. Scroll to **5-Day Portfolio Trend**.
+4. **Expected:** A line chart with up to **5 date labels** and a **Portfolio Value** series. Hovering a point shows the **date** and **portfolio dollar value** (total portfolio, not per-ticker prices).
 
 ### Test Case 6: Stress Test Scenarios
 
-1. Generate a portfolio with $10,000 in "Tech Giants."
-2. Navigate to the **Risk** tab.
-3. Review the stress test cards.
-4. **Expected:** At least 5 scenario cards appear (e.g., "GFC 2008," "COVID 2020," "Dot-Com Burst," "2022 Inflation," "Black Monday"). Each card shows the estimated portfolio loss in dollars and percentage, with a severity indicator bar.
+1. Generate `10000` with **Growth Investing**.
+2. Open the **Risk & Diversification** tab.
+3. Scroll to **Stress Tests**.
+4. **Expected:** At least **5** scenario cards, including **GFC 2008**, **COVID-19 Crash 2020**, dot-com, **2022 Inflation**, and **Black Monday**. Each shows **loss %**, **loss in dollars**, and a severity bar.
 
 ### Test Case 7: Compare Two Strategies
 
-1. Generate a portfolio with $10,000 in "Tech Giants."
-2. Navigate to the **Compare** tab.
-3. Select a second strategy (e.g., "Dividend Aristocrats") and click compare.
-4. **Expected:** A side-by-side comparison table appears showing both strategies' Sharpe ratio, expected return, volatility, Monte Carlo median, and max drawdown. Winner badges highlight which strategy wins each metric.
+1. Open the **Compare** tab.
+2. Set **Strategy A** to **Growth Investing** and **Strategy B** to **Index Investing**.
+3. Ensure the investment field is `10000`, then click **Run side-by-side**.
+4. **Expected:** Two columns/cards with ticker chips, 1Y backtest stats, and Monte Carlo median. **Best** badges mark the winner on Sharpe, return, max drawdown, or MC median where applicable.
 
-### Test Case 8: Goal Tracker Probability Calculation
+### Test Case 8: Goal Tracker Probability
 
-1. Generate a portfolio with $10,000 in any strategy.
-2. Navigate to the **Overview** tab and find the Goal Tracker section.
-3. Enter a target amount of `15000` and a time horizon of `5` years.
-4. **Expected:** The goal tracker displays a probability percentage (e.g., "72% chance of reaching $15,000 in 5 years") and shows a goal line on the Monte Carlo projection chart.
+1. Generate any portfolio (e.g. `10000`, **Value Investing**).
+2. Open the **What-If** tab.
+3. In **Goal Tracker**, enter Target value `15000` and Time horizon `5` years.
+4. Click **Estimate probability**.
+5. **Expected:** A probability headline (e.g. “X% chance of reaching $15,000 in 5 years”) and supporting detail text. The Monte Carlo chart above may reference the goal.
 
 ### Test Case 9: Export Portfolio as CSV
 
-1. Generate a portfolio with $10,000 in any strategy.
-2. Click the **Export CSV** button (download icon in the results header).
-3. Open the downloaded `.csv` file.
-4. **Expected:** The CSV contains columns for Ticker, Company Name, Weight (%), Shares, Value ($), and the rows match what was displayed on screen. The values are properly formatted numbers.
+1. After generating a portfolio, click **Download CSV** in the results header (next to **Copy share link**).
+2. Open the downloaded `.csv` file.
+3. **Expected:** Header rows (investment amount, strategies) and columns **Ticker, Name, Strategy, Weight %, Shares, Entry Price, Current Price, Invested, Current Value** matching the on-screen holdings.
 
-### Test Case 10: Saved Portfolios Persist and Reload
+### Test Case 10: Saved Portfolios Persist After Refresh
 
-1. Generate a portfolio with $8,000 in "Dividend Aristocrats."
-2. Click the **Save** button to save the portfolio.
-3. Refresh the page (`F5` or `Cmd+R`).
-4. Open the **Saved Portfolios** sidebar.
-5. Click the saved portfolio entry.
-6. **Expected:** The previously generated portfolio reloads with the same allocation, metrics, and charts — matching the original $8,000 Dividend Aristocrats result.
+1. Generate `10000` with **Quality Investing**.
+2. Wait for results; note tickers and total value.
+3. In the left column under **Saved Portfolios**, confirm a new entry appears (strategy name and value).
+4. Refresh the browser (`F5` or `Cmd+R`).
+5. Click that entry in **Saved Portfolios**.
+6. **Expected:** The same allocation reloads (same tickers, weights, and approximately $10,000 total). Charts and metrics repopulate.
 
 ---
 
