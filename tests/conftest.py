@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the Quantum Portfolio Lab test suite."""
+"""Shared pytest fixtures for the Alloc8 test suite."""
 
 from __future__ import annotations
 

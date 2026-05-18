@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from typing import NotRequired, TypedDict, cast
+import sys
+
+from typing import TypedDict, cast
+
+if sys.version_info >= (3, 11):
+    from typing import NotRequired
+else:
+    from typing_extensions import NotRequired
 
 
 class StrategyStock(TypedDict):

@@ -1,4 +1,6 @@
 flask>=3.0.0
+typing_extensions>=4.8.0
+eval_type_backport>=0.2.0
 yfinance>=0.2.33
 pandas>=2.0.0
 numpy>=1.24.0

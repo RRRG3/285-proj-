@@ -1,13 +1,13 @@
-# 285 Project SEP
+# Alloc8
 
-> Build, track, and stress-test a real stock portfolio in minutes — with live prices, backtests, Monte Carlo forecasts, and a what-if workbench you can drag.
+> Stock portfolio suggestion engine — build, track, and stress-test a real portfolio in minutes with live prices, backtests, Monte Carlo forecasts, and a what-if workbench you can drag.
 
 [![Tests](https://img.shields.io/badge/tests-55%20passing-4ade80?style=flat-square)]()
 [![Coverage](https://img.shields.io/badge/coverage-65%25-58cbff?style=flat-square)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)]()
 
-A Flask + Pydantic + Chart.js stack with a multi-source data layer, microstructure-aware risk model, and a UI built around six focused tabs (Overview · Performance · Risk · What-If · Compare · Data). Originally built for *285 Software Engineering Processes* and grown into a real allocation tool.
+A Flask + Pydantic + Chart.js stack with a multi-source data layer, microstructure-aware risk model, and a UI built around six focused tabs (Overview · Performance · Risk · What-If · Compare · Data). Built for *CMPE 285 — Software Engineering Processes* (SJSU).
 
 ---
 

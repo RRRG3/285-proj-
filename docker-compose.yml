@@ -3,7 +3,7 @@ version: "3.9"
 services:
   qpl:
     build: .
-    container_name: quantum-portfolio-lab
+    container_name: alloc8
     ports:
       - "8080:8080"
     environment:

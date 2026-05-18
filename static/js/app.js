@@ -574,12 +574,8 @@ function pulseLiveIndicator(isError = false) {
     node.classList.add('live-pulse');
 }
 
-function buildRefreshPayload() {
-    if (!latestPortfolioSnapshot) {
-        return null;
-    }
-
-    const sanitizeAllocation = (allocation) => ({
+function sanitizeAllocationForApi(allocation) {
+    return {
         ticker: allocation.ticker,
         name: allocation.name,
         strategy: allocation.strategy,
@@ -596,7 +592,13 @@ function buildRefreshPayload() {
         current_value: allocation.current_value,
         quote_source: allocation.quote_source,
         quote_is_stale: allocation.quote_is_stale
-    });
+    };
+}
+
+function buildRefreshPayload() {
+    if (!latestPortfolioSnapshot) {
+        return null;
+    }
 
     return {
         portfolio_id: latestPortfolioSnapshot.portfolio_id,
@@ -605,7 +607,7 @@ function buildRefreshPayload() {
         allocation_method: latestPortfolioSnapshot.allocation_method,
         cash_remainder: latestPortfolioSnapshot.cash_remainder,
         total_allocated: latestPortfolioSnapshot.total_allocated,
-        allocations: (latestPortfolioSnapshot.allocations || []).map(sanitizeAllocation)
+        allocations: (latestPortfolioSnapshot.allocations || []).map(sanitizeAllocationForApi)
     };
 }
 
@@ -619,7 +621,7 @@ function buildCsvExportPayload(portfolio) {
         total_value: portfolio.total_value || 0,
         cash_remainder: portfolio.cash_remainder || 0,
         strategies: portfolio.strategies || [],
-        allocations: portfolio.allocations || []
+        allocations: (portfolio.allocations || []).map(sanitizeAllocationForApi)
     };
 }
 
@@ -1792,7 +1794,7 @@ function buildPrintableReportHtml(portfolio) {
             </style>
         </head>
         <body>
-            <h1>Quantum Portfolio Lab Report</h1>
+            <h1>Alloc8 Portfolio Report</h1>
             <p class="meta"><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
             <p class="meta"><strong>Strategies:</strong> ${(portfolio.strategies || []).join(' + ')}</p>
             <p class="meta"><strong>Investment Amount:</strong> ${formatCurrency(portfolio.investment_amount || 0)}</p>

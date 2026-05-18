@@ -1,6 +1,8 @@
 """
-Flask web application for Stock Portfolio Suggestion Engine.
+Flask web application for Alloc8 — Stock Portfolio Suggestion Engine.
 """
+
+from __future__ import annotations
 
 import csv
 import io
@@ -453,7 +455,7 @@ def health() -> Response:
     clock = portfolio_engine.data_fetcher.get_market_clock()
     payload: dict[str, Any] = {
         "status": "ok",
-        "service": "quantum-portfolio-lab",
+        "service": "alloc8",
         "market_status": clock.get("market_status"),
         "demo_mode_enabled": portfolio_engine.data_fetcher.demo_mode_enabled,
         "scheduler": {
@@ -695,7 +697,7 @@ def export_csv():
         output = io.StringIO()
         writer = csv.writer(output)
 
-        writer.writerow(["Quantum Portfolio Lab Report"])
+        writer.writerow(["Alloc8 Portfolio Report"])
         writer.writerow(["Generated At (UTC)", datetime.now(timezone.utc).isoformat()])
         writer.writerow(["Investment Amount", validated.investment_amount])
         writer.writerow(["Total Value", validated.total_value])
@@ -803,7 +805,7 @@ if __name__ == '__main__':
     except ValueError:
         port = 8080
 
-    print("Starting Stock Portfolio Suggestion Engine...")
+    print("Starting Alloc8...")
     print(f"Navigate to: http://localhost:{port}")
     print("Select 1-2 strategies and enter investment amount (min $5000)")
     should_start_scheduler = os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not debug_mode
