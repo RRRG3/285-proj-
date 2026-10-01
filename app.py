@@ -151,11 +151,12 @@ def build_portfolio_narrative(portfolio: dict) -> dict:
     )
     if one_year:
         ret = float(one_year.get("portfolio_total_return_pct") or 0.0)
-        sharpe = float(one_year.get("portfolio_sharpe") or 0.0)
+        sharpe_value = one_year.get("portfolio_sharpe")
+        sharpe = f"{sharpe_value:.2f}" if sharpe_value is not None else "unavailable"
         dd = float(one_year.get("portfolio_max_drawdown_pct") or 0.0)
         bullets.append(
-            f"Over the past year this exact mix would have returned {ret:+.1f}% with a Sharpe of "
-            f"{sharpe:.2f} and a worst-case drawdown of {dd:.1f}%."
+            f"A historical replay of today's holdings returned {ret:+.1f}% with Sharpe "
+            f"{sharpe} and observed maximum drawdown {dd:.1f}%. This is not out-of-sample evidence."
         )
 
     monte = portfolio.get("monte_carlo") or {}
@@ -168,7 +169,7 @@ def build_portfolio_narrative(portfolio: dict) -> dict:
         if cv > 0 and median > 0:
             median_return = (median / cv - 1.0) * 100.0
             bullets.append(
-                f"Looking out 1 year, our Monte Carlo median lands at ${median:,.0f} "
+                f"In resampled historical scenarios, the 1-year median is ${median:,.0f} "
                 f"({median_return:+.1f}%); the 5th–95th percentile range spans "
                 f"${p5:,.0f} to ${p95:,.0f}."
             )

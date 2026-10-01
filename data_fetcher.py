@@ -175,7 +175,8 @@ class StockDataFetcher:
         try:
             if value in (None, "", "N/D"):
                 return None
-            return float(value)
+            result = float(value)
+            return result if math.isfinite(result) and result > 0 else None
         except (TypeError, ValueError):
             return None
 
@@ -231,7 +232,8 @@ class StockDataFetcher:
             or fast_info.get("regularMarketPrice")
             or fast_info.get("previousClose")
         )
-        if not price:
+        price = self._safe_float(price)
+        if price is None:
             return None
 
         return {
@@ -247,11 +249,11 @@ class StockDataFetcher:
             return None
 
         price = (
-            info.get("currentPrice")
-            or info.get("regularMarketPrice")
-            or info.get("previousClose")
+            info.get("regularMarketPrice")
+            or info.get("currentPrice")
         )
-        if not price:
+        price = self._safe_float(price)
+        if price is None:
             return None
 
         timestamp = None
@@ -282,7 +284,7 @@ class StockDataFetcher:
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=self.ny_tz)
         else:
-            timestamp = datetime.now(self.ny_tz)
+            timestamp = None
 
         return {
             "price": close,
@@ -347,7 +349,7 @@ class StockDataFetcher:
         stale_limit = (
             self.quote_stale_seconds_open if market_status == "OPEN" else self.quote_stale_seconds_other
         )
-        is_stale = bool(age_seconds is not None and age_seconds > stale_limit)
+        is_stale = age_seconds is None or age_seconds > stale_limit
 
         source = quote.get("source", "unknown")
         base_reliability = {
@@ -415,8 +417,8 @@ class StockDataFetcher:
         try:
             stock = yf.Ticker(ticker)
             for method in (
-                self._quote_from_yfinance_fast_info,
                 self._quote_from_yfinance_info,
+                self._quote_from_yfinance_fast_info,
                 self._quote_from_yfinance_history,
             ):
                 try:
@@ -625,7 +627,7 @@ class StockDataFetcher:
             close_df = close_df.apply(pd.to_numeric, errors="coerce")
             for ticker in close_df.columns:
                 if ticker in quality_map and close_df[ticker].dropna().shape[0] > 0:
-                    quality_map[ticker] = {"source": "yfinance_download"}
+                    quality_map[ticker] = {"source": "yfinance_download", "price_basis": "provider_adjusted_close"}
 
         # Fallback to Stooq for missing tickers
         for ticker in normalized_tickers:
@@ -648,11 +650,12 @@ class StockDataFetcher:
                     close_df = stooq_frame
                 else:
                     if ticker in close_df.columns:
-                        close_df[ticker] = close_df[ticker].combine_first(stooq_frame[ticker])
+                        # Replace the entire series; never splice providers with different adjustment bases.
+                        close_df = close_df.drop(columns=[ticker]).join(stooq_frame, how="outer")
                     else:
                         close_df = close_df.join(stooq_frame, how="outer")
 
-                quality_map[ticker] = {"source": "stooq_csv"}
+                quality_map[ticker] = {"source": "stooq_csv", "price_basis": "unverified_adjustment"}
             except Exception as exc:
                 print(f"Error fetching Stooq history for {ticker}: {exc}")
                 self._increment_monitor("stooq_failures", 1)
@@ -699,7 +702,7 @@ class StockDataFetcher:
         if cached_history is not None:
             return cached_history
 
-        end_date = date.today()
+        end_date = date.today() - timedelta(days=1)
         start_date = end_date - timedelta(days=days + 12)
         frame, _ = self.get_price_history_frame([ticker], start_date, end_date)
 
@@ -743,18 +746,18 @@ class StockDataFetcher:
         if cached_volatility is not None:
             return cached_volatility
 
-        end_date = date.today()
+        end_date = date.today() - timedelta(days=1)
         start_date = end_date - timedelta(days=lookback_days + 60)
         frame, _ = self.get_price_history_frame([ticker], start_date, end_date)
         if frame.empty or ticker not in frame.columns:
             return None
 
-        returns = frame[ticker].dropna().pct_change().dropna().tail(lookback_days)
-        if returns.empty:
+        returns = frame[ticker].where(frame[ticker].map(lambda x: pd.notna(x) and math.isfinite(x) and x > 0)).pct_change(fill_method=None).dropna().tail(lookback_days)
+        if len(returns) < 30:
             return None
 
         volatility = float(returns.std() * math.sqrt(252))
-        if volatility <= 0:
+        if not math.isfinite(volatility) or volatility <= 0:
             return None
 
         self._cache_set(cache_key, volatility, self.volatility_cache_seconds)
@@ -832,8 +835,8 @@ class StockDataFetcher:
     def get_news(self, ticker: str, limit: int = 3) -> list[dict]:
         """Fetch a small set of recent news headlines for a ticker.
 
-        Returns a list of {title, publisher, url, published_at} dicts. Falls back
-        to deterministic synthetic items in demo mode and on any provider failure.
+        Returns a list of {title, publisher, url, published_at} dicts. Synthetic items are provided only in explicitly enabled demo mode.
+        Provider failures return an empty list.
         """
         cache_key = f"news::{ticker}::{limit}"
         cached = self._cache_get(cache_key)
@@ -876,15 +879,11 @@ class StockDataFetcher:
                         "published_at": published,
                     }
                 )
-            if not items:
-                items = self._demo_news_items(ticker, limit)
             self._cache_set(cache_key, items, 600)
             return items
         except Exception as exc:  # pragma: no cover - network surface
             self._record_error("news_fetch", ticker, exc)
-            items = self._demo_news_items(ticker, limit)
-            self._cache_set(cache_key, items, 600)
-            return items
+            return []
 
     def _demo_news_items(self, ticker: str, limit: int) -> list[dict]:
         templates = [
@@ -901,7 +900,8 @@ class StockDataFetcher:
             title, publisher = templates[tmpl_idx]
             published = (datetime.now(timezone.utc) - timedelta(hours=2 * (offset + 1))).isoformat()
             chosen.append({
-                "title": title.format(t=ticker),
+                "title": "[DEMO] " + title.format(t=ticker),
+                "is_synthetic": True,
                 "publisher": publisher,
                 "url": None,
                 "published_at": published,

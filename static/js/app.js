@@ -1367,7 +1367,7 @@ function displayBacktests(backtestAnalysis) {
     const transactionCost = config.transaction_cost_bps ?? 0;
     const rebalanceFreq = config.rebalance_frequency || 'N/A';
     configText.textContent =
-        `Assumptions: ${transactionCost} bps transaction cost, ${rebalanceFreq} rebalancing.`;
+        `Assumptions: ${transactionCost} bps per buy/sell notional including entry; ${rebalanceFreq} rebalancing; zero cash yield. Turnover is gross traded notional / initial capital.`;
 
     const periods = backtestAnalysis.periods || [];
     if (periods.length === 0) {
@@ -1393,9 +1393,10 @@ function displayBacktests(backtestAnalysis) {
 
         card.innerHTML = `
             <h3>${period.period}</h3>
+            <p class="panel-subtitle">${period.start_date} to ${period.end_date} · ${period.observations} observations</p>
             <div class="backtest-metrics">
                 <p><span>Return:</span> ${formatPercent(period.portfolio_total_return_pct || 0)}</p>
-                <p><span>Sharpe:</span> ${formatNumber(period.portfolio_sharpe || 0)}</p>
+                <p><span>Sharpe:</span> ${formatMaybeNumber(period.portfolio_sharpe)}</p>
                 <p><span>Drawdown:</span> ${formatPercent(period.portfolio_max_drawdown_pct || 0)}</p>
                 <p><span>Turnover:</span> ${formatPercent(period.turnover_pct || 0)}</p>
                 <p><span>Txn Cost:</span> ${formatPercent(period.transaction_cost_paid_pct || 0)}</p>
@@ -1552,7 +1553,7 @@ function displayDataQuality(dataQuality, qualityWarnings) {
         { label: 'Stale Quotes', value: dataQuality.stale_count ?? 0 },
         { label: 'Fallback Quotes', value: dataQuality.fallback_count ?? 0 },
         {
-            label: 'Avg Reliability',
+            label: 'Source Quality Heuristic',
             value: formatNumber((dataQuality.average_reliability || 0) * 100, 1) + '%'
         }
     ];
@@ -2006,8 +2007,8 @@ function displayMonteCarlo(payload) {
     }
 
     statusEl.textContent =
-        `${payload.simulations.toLocaleString()} simulations · ${payload.forecast_days} trading days · ` +
-        `Daily μ=${payload.expected_return_daily_pct.toFixed(4)}% σ=${payload.volatility_daily_pct.toFixed(4)}%`;
+        `${payload.simulations.toLocaleString()} resampled historical paths · ${payload.forecast_days} trading days · ` +
+        `${payload.block_length}-day blocks · ${(payload.cash_ratio * 100).toFixed(1)}% cash. ${payload.assumptions}`;
 
     const labels = payload.sample_days.map(d => `Day ${d}`);
     const bands = payload.bands;
@@ -2349,19 +2350,18 @@ function evaluateGoalTracker() {
     }
 
     const prob = Math.max(0, Math.min(100, result.probability_pct));
-    headlineEl.innerHTML = `${prob.toFixed(1)}% <span class="goal-prob-suffix">chance of reaching ${formatCurrency(targetValue)}</span>`;
+    headlineEl.innerHTML = `${prob.toFixed(1)}% <span class="goal-prob-suffix">model probability of ending at or above ${formatCurrency(targetValue)}</span>`;
     headlineEl.classList.toggle('goal-prob-good', prob >= 60);
     headlineEl.classList.toggle('goal-prob-mid', prob >= 30 && prob < 60);
     headlineEl.classList.toggle('goal-prob-low', prob < 30);
 
-    const verdict = prob >= 70 ? 'Likely' : prob >= 40 ? 'Plausible' : prob >= 15 ? 'Stretch goal' : 'Unlikely without higher risk or more capital';
-    detailEl.textContent = `${verdict} — based on the portfolio's historical drift and volatility, projected ${targetYears} years (${days} trading days) forward under a lognormal model.`;
+    detailEl.textContent = `Illustrative lognormal estimate over ${targetYears} years (${days} trading days), not a calibrated forecast. It estimates the terminal value, not the probability of touching the goal along the way. Historical averages may not persist.`;
 
     statsEl.innerHTML = '';
     [
         { label: 'Current value', value: formatCurrency(goalTrackerState.current_value) },
         { label: 'Target', value: formatCurrency(targetValue) },
-        { label: 'Expected value', value: formatCurrency(result.expected_value) },
+        { label: 'Model mean value', value: formatCurrency(result.expected_value) },
         { label: 'Horizon', value: `${targetYears} yrs` },
     ].forEach((item) => {
         const card = document.createElement('div');
@@ -2423,6 +2423,7 @@ function setupTweakWorkbench(workbench, currentValue) {
         sigmaAnnual: (workbench.sigma_annual_pct || []).map((v) => v / 100),
         corr: workbench.correlation_matrix || [],
         rf: (workbench.risk_free_rate_annual_pct || 0) / 100,
+        cashRatio: workbench.cash_ratio || 0,
         initialWeights: (workbench.initial_weights || []).slice(),
         currentValue: currentValue || 0,
         currentWeights: (workbench.initial_weights || []).slice(),
@@ -2431,7 +2432,7 @@ function setupTweakWorkbench(workbench, currentValue) {
 
     if (statusEl) {
         statusEl.textContent =
-            `Drag sliders to test "what-if" weights. Live recompute uses ${workbench.history_days || '~500'} days of returns.`;
+            `Historical sensitivity over ${workbench.history_days} observations; ${(tweakState.cashRatio * 100).toFixed(1)}% cash held constant. Hypothetical weights do not execute trades or enforce allocation limits.`;
     }
 
     renderTweakSliders();
@@ -2520,8 +2521,11 @@ function computeTweakMetrics(weightsRaw) {
             portVar += w[i] * w[j] * cov;
         }
     }
-    const portVol = portVar > 0 ? Math.sqrt(portVar) : 0;
-    const sharpe = portVol > 0 ? (portReturn - tweakState.rf) / portVol : 0;
+    const investedFraction = 1 - tweakState.cashRatio;
+    portReturn *= investedFraction;
+    const portVol = (portVar > 0 ? Math.sqrt(portVar) : 0) * investedFraction;
+    const annualArithmeticRf = 252 * (Math.pow(1 + tweakState.rf, 1 / 252) - 1);
+    const sharpe = portVol > 1e-12 ? (portReturn - annualArithmeticRf) / portVol : null;
     const hhi = w.reduce((s, x) => s + x * x, 0);
     const effectiveN = hhi > 0 ? 1 / hhi : 0;
 
@@ -2541,9 +2545,9 @@ function renderTweakMetrics(weightsRaw) {
     const base = tweakState.baselineMetrics || live;
 
     const cards = [
-        { label: 'Expected Return (annual)', value: `${live.portReturnPct.toFixed(2)}%`, delta: live.portReturnPct - base.portReturnPct, deltaSuffix: 'pp' },
+        { label: 'Historical Mean (annualized)', value: `${live.portReturnPct.toFixed(2)}%`, delta: live.portReturnPct - base.portReturnPct, deltaSuffix: 'pp' },
         { label: 'Volatility (annual)', value: `${live.portVolPct.toFixed(2)}%`, delta: live.portVolPct - base.portVolPct, deltaSuffix: 'pp', invert: true },
-        { label: 'Sharpe Ratio', value: live.sharpe.toFixed(2), delta: live.sharpe - base.sharpe, deltaSuffix: '' },
+        { label: 'Sharpe Ratio', value: formatMaybeNumber(live.sharpe), delta: live.sharpe === null || base.sharpe === null ? 0 : live.sharpe - base.sharpe, deltaSuffix: '' },
         { label: 'Effective # Holdings', value: live.effectiveN.toFixed(2), delta: live.effectiveN - base.effectiveN, deltaSuffix: '' },
         { label: 'Largest Weight', value: `${live.topWeightPct.toFixed(1)}%`, delta: live.topWeightPct - base.topWeightPct, deltaSuffix: 'pp', invert: true },
     ];
