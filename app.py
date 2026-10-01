@@ -220,7 +220,7 @@ def build_portfolio_narrative(portfolio: dict) -> dict:
 
 
 def build_action_plan(portfolio: dict) -> dict:
-    """Turn an allocation into a concrete buy-side checklist with execution-cost estimate."""
+    """Describe model quantities and heuristic costs without inventing executable limits."""
     allocations = portfolio.get("allocations") or []
     if not allocations:
         return {"orders": [], "summary": "No holdings to trade."}
@@ -241,13 +241,14 @@ def build_action_plan(portfolio: dict) -> dict:
         slippage = float(cost_meta.get("expected_execution_cost") or 0.0)
         estimated_slippage_total += slippage
         orders.append({
-            "action": "BUY",
+            "action": "ILLUSTRATION",
             "ticker": ticker,
             "name": allocation.get("name") or ticker,
             "shares": round(shares, 4),
             "shares_whole": int(shares),
             "fractional_share": round(shares - int(shares), 4),
-            "limit_price": round(price * 1.005, 2) if price else None,
+            "limit_price": None,
+            "reference_price": round(price, 2) if price else None,
             "estimated_cost": round(cost, 2),
             "estimated_execution_cost": round(slippage, 2),
             "weight_pct": round(float(allocation.get("weight_pct") or 0.0), 2),
@@ -259,9 +260,9 @@ def build_action_plan(portfolio: dict) -> dict:
         "total_buy_value": round(total_cost, 2),
         "cash_to_hold": round(cash_remainder, 2),
         "estimated_slippage_total": round(estimated_slippage_total, 2),
-        "open_at_hint": "Place orders at the next regular market open. Use limit prices ~0.5% above last to clear without chasing.",
+        "open_at_hint": "Illustrative quantities at reference prices, not executable orders. Costs are heuristic and are not reserved in the allocation budget; quotes and available funds require independent verification.",
         "summary": (
-            f"{len(orders)} buys totaling {locale_currency(total_cost)} "
+            f"{len(orders)} model positions totaling {locale_currency(total_cost)} "
             f"+ {locale_currency(cash_remainder)} cash; est. execution cost {locale_currency(estimated_slippage_total)}."
         ),
     }

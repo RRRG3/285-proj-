@@ -52,6 +52,9 @@ class AllocationInput(BaseStrictModel):
     name: str | None = None
     strategy: str | None = None
     asset_type: str | None = None
+    sector: str = "Other"
+    volatility_is_default: bool = False
+    portfolio_weight_pct: float | None = None
     rationale: str | None = None
     conviction: float | None = None
     annualized_volatility: float | None = None

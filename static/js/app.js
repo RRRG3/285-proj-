@@ -580,6 +580,9 @@ function sanitizeAllocationForApi(allocation) {
         name: allocation.name,
         strategy: allocation.strategy,
         asset_type: allocation.asset_type,
+        sector: allocation.sector || "Other",
+        volatility_is_default: allocation.volatility_is_default || false,
+        portfolio_weight_pct: allocation.portfolio_weight_pct,
         rationale: allocation.rationale,
         conviction: allocation.conviction,
         annualized_volatility: allocation.annualized_volatility,
@@ -795,6 +798,8 @@ function displayResults(portfolio, options = {}) {
     document.getElementById('allocationMethod').textContent = portfolio.allocation_method || 'N/A';
 
     renderHeaderMeta(portfolio);
+    const quoteLabel = document.getElementById("liveLabel");
+    if (quoteLabel) quoteLabel.textContent = portfolio.demo_mode_enabled ? "Demo" : ((portfolio.data_quality || {}).stale_count ? "Unverified quotes" : "Market quotes");
     displayMetrics(portfolio.metrics || {});
     displayAllocations(portfolio.allocations || []);
     displayTrendChart(portfolio.trend_data || { dates: [], values: [] });
@@ -3182,7 +3187,7 @@ function displayActionPlan(actionPlan) {
         return;
     }
     panel.style.display = '';
-    summary.textContent = actionPlan.summary || `${orders.length} buys ready for next market open.`;
+    summary.textContent = actionPlan.summary || `${orders.length} illustrative positions.`;
     hint.textContent = actionPlan.open_at_hint || '';
 
     list.innerHTML = '';
@@ -3195,10 +3200,10 @@ function displayActionPlan(actionPlan) {
             : '';
         li.innerHTML = `
             <span class="action-plan-step">${idx + 1}</span>
-            <span class="action-plan-action">BUY</span>
+            <span class="action-plan-action">MODEL</span>
             <span class="action-plan-shares">${Number(order.shares).toFixed(4)} sh</span>
             <span class="action-plan-ticker">${order.ticker}</span>
-            <span class="action-plan-price">@ ≤ ${formatCurrency(order.limit_price || 0)}</span>
+            <span class="action-plan-price">reference ${formatCurrency(order.reference_price || 0)}</span>
             <span class="action-plan-cost">≈ ${formatCurrency(order.estimated_cost)}</span>
             ${slippageHtml}
         `;

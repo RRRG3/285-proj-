@@ -198,3 +198,21 @@ def test_generate_portfolio_integration(tmp_path, monkeypatch):
     assert payload["backtest_analysis"]["research_status"] == "historical_replay"
     assert all(a["cost"] <= 2500 + 1e-8 for a in payload["allocations"])
     assert payload["monte_carlo"]["method"] == "moving_block_bootstrap"
+
+
+def test_refresh_preserves_sector_and_no_invented_limit(tmp_path, monkeypatch):
+    import app as app_module
+    from portfolio_tracker import PortfolioTracker
+    from schemas import AllocationInput
+    monkeypatch.setattr(app_module, "portfolio_tracker", PortfolioTracker(data_dir=str(tmp_path)))
+    app_module.portfolio_engine.data_fetcher.set_demo_mode(True)
+    client = app_module.app.test_client()
+    p = client.post("/generate-portfolio", json={"amount": 10000, "strategies": ["Growth Investing"]}).get_json()
+    body = {"investment_amount": 10000, "strategies": p["strategies"], "cash_remainder": p["cash_remainder"],
+            "allocations": [{k: v for k, v in a.items() if k in AllocationInput.model_fields} for a in p["allocations"]]}
+    response = client.post("/refresh-portfolio", json=body)
+    assert response.status_code == 200
+    refreshed = response.get_json()
+    assert refreshed["sector_exposure"] == p["sector_exposure"]
+    assert "Other" not in refreshed["sector_exposure"]["sectors"]
+    assert all(order["limit_price"] is None for order in refreshed["action_plan"]["orders"])
