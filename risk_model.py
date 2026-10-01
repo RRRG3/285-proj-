@@ -9,6 +9,9 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
+from portfolio_analytics import PortfolioAnalytics
+from config import settings
+
 
 @dataclass
 class RiskConfig:
@@ -41,7 +44,7 @@ ADV_HINTS_USD = {
 class MarketMicrostructureRiskModel:
     def __init__(self, data_fetcher, config: RiskConfig | None = None):
         self.data_fetcher = data_fetcher
-        self.config = config or RiskConfig()
+        self.config = config or settings.risk
 
     def _estimate_adv_dollars(self, ticker: str, price: float) -> float:
         hinted = ADV_HINTS_USD.get(ticker)
@@ -99,6 +102,7 @@ class MarketMicrostructureRiskModel:
             "ticker": ticker,
             "notional": notional,
             "adv_dollars": adv_dollars,
+            "estimate_basis": "Heuristic ADV, spread and impact assumptions; not observed executable quotes.",
             "spread_bps": spread_bps,
             "impact_bps": impact_bps,
             "commission_bps": commission_bps,
@@ -106,7 +110,7 @@ class MarketMicrostructureRiskModel:
             "expected_execution_cost": expected_cost,
         }
 
-    def _portfolio_returns(self, allocations: list[dict[str, Any]]) -> pd.Series:
+    def _portfolio_returns(self, allocations: list[dict[str, Any]], portfolio_value: float | None = None) -> pd.Series:
         if not allocations:
             return pd.Series(dtype="float64")
 
@@ -120,29 +124,20 @@ class MarketMicrostructureRiskModel:
         if frame.empty:
             return pd.Series(dtype="float64")
 
-        weights = {
-            allocation["ticker"]: float(allocation.get("weight", 0.0))
-            for allocation in allocations
-            if allocation.get("ticker") in frame.columns
-        }
-        if not weights:
+        # Current mark-to-market exposures, including dilution by uninvested cash.
+        amounts = {a["ticker"]: float(a.get("current_value", a.get("cost", 0))) for a in allocations}
+        total = portfolio_value if portfolio_value is not None else sum(amounts.values())
+        if (not np.isfinite(total) or total <= 0 or len(amounts) != len(allocations)
+                or any(not np.isfinite(v) or v < 0 for v in amounts.values())):
             return pd.Series(dtype="float64")
-
-        total = sum(weights.values())
-        if total <= 0:
+        aligned = PortfolioAnalytics._prepare_price_slice(frame, list(amounts))
+        if len(aligned) < 60:
             return pd.Series(dtype="float64")
-
-        normalized = {ticker: value / total for ticker, value in weights.items()}
-        aligned = frame[list(normalized.keys())].ffill().dropna()
-        if aligned.shape[0] < 30:
-            return pd.Series(dtype="float64")
-
-        returns = aligned.pct_change().dropna()
-        portfolio_returns = sum(returns[ticker] * weight for ticker, weight in normalized.items())
-        return portfolio_returns
+        returns = aligned.pct_change(fill_method=None).dropna()
+        return sum(returns[ticker] * value / total for ticker, value in amounts.items())
 
     def _var_cvar_payload(self, allocations: list[dict[str, Any]], portfolio_value: float) -> dict[str, Any]:
-        returns = self._portfolio_returns(allocations)
+        returns = self._portfolio_returns(allocations, portfolio_value)
         if returns.empty:
             return {
                 "status": "insufficient_data",
@@ -160,11 +155,14 @@ class MarketMicrostructureRiskModel:
 
         annualized_vol = float(returns.std() * np.sqrt(252.0))
 
-        daily_var_pct = -quantile * 100.0
-        daily_cvar_pct = -cvar * 100.0
+        daily_var_pct = max(0.0, -quantile * 100.0)
+        daily_cvar_pct = max(daily_var_pct, -cvar * 100.0)
 
         return {
             "status": "ok",
+            "method": "Historical simulation using current NAV exposures; zero cash return.",
+            "observations": len(returns),
+            "confidence": self.config.var_confidence,
             "daily_var_pct": daily_var_pct,
             "daily_cvar_pct": daily_cvar_pct,
             "daily_var_dollars": portfolio_value * daily_var_pct / 100.0,
@@ -172,11 +170,14 @@ class MarketMicrostructureRiskModel:
             "annualized_volatility_pct": annualized_vol * 100.0,
         }
 
-    def _limit_checks(self, allocations: list[dict[str, Any]], var_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    def _limit_checks(self, allocations: list[dict[str, Any]], var_payload: dict[str, Any], portfolio_value: float | None = None) -> list[dict[str, Any]]:
         breaches: list[dict[str, Any]] = []
 
         for allocation in allocations:
-            position_pct = float(allocation.get("weight_pct", 0.0))
+            position_pct = (
+                float(allocation.get("current_value", allocation.get("cost", 0))) / portfolio_value * 100
+                if portfolio_value and portfolio_value > 0 else float(allocation.get("weight_pct", 0))
+            )
             if position_pct > self.config.max_single_position_pct:
                 breaches.append(
                     {
@@ -313,7 +314,7 @@ class MarketMicrostructureRiskModel:
         )
 
         var_payload = self._var_cvar_payload(allocations, portfolio_value)
-        breaches = self._limit_checks(allocations, var_payload)
+        breaches = self._limit_checks(allocations, var_payload, portfolio_value)
         stress_payload = self._stress_test_payload(allocations, portfolio_value)
 
         return {

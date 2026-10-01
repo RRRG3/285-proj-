@@ -1,13 +1,18 @@
 # Alloc8
 
-> Stock portfolio suggestion engine — build, track, and stress-test a real portfolio in minutes with live prices, backtests, Monte Carlo forecasts, and a what-if workbench you can drag.
+> Stock portfolio suggestion engine — build, track, and stress-test a real portfolio in minutes with live prices, backtests, historical scenario simulations, and a what-if workbench you can drag.
 
-[![Tests](https://img.shields.io/badge/tests-55%20passing-4ade80?style=flat-square)]()
-[![Coverage](https://img.shields.io/badge/coverage-65%25-58cbff?style=flat-square)]()
+[![Tests](https://github.com/RRRG3/285-proj-/actions/workflows/tests.yml/badge.svg)](https://github.com/RRRG3/285-proj-/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)]()
 
 **Alloc8** is a Flask web app for CMPE 285 (Software Engineering Processes, SJSU). Enter an amount and one or two investing strategies; the engine assigns stocks/ETFs, splits capital, shows live portfolio value, and tracks a five-day value trend.
+
+## Analytical accuracy
+
+The app now enforces position caps during allocation, includes entry and both sides of rebalance costs, uses arithmetic excess-return Sharpe, aligns benchmark dates, and rejects incomplete portfolio history. Cash is included in risk and scenario calculations. Missing live news no longer becomes synthetic news.
+
+Historical results replay **today's holdings and weights** and retain selection/look-ahead bias. They are not independently validated strategy performance. Scenario bands resample historical blocks; they are not calibrated forecasts. Read [methodology, assumptions and validation limits](docs/RESEARCH_METHODOLOGY.md) before interpreting the outputs.
 
 ---
 
@@ -146,7 +151,7 @@ Follow these steps to verify core and extended functionality. Complete [Setup in
 2. Open the **What-If** tab.
 3. In **Goal Tracker**, enter Target value `15000` and Time horizon `5` years.
 4. Click **Estimate probability**.
-5. **Expected:** A probability headline (e.g. “X% chance of reaching $15,000 in 5 years”) and supporting detail text. The Monte Carlo chart above may reference the goal.
+5. **Expected:** An explicitly illustrative lognormal model estimate of ending at or above the target and supporting detail text. The Monte Carlo chart above may reference the goal.
 
 ### Test Case 9: Export Portfolio as CSV
 
@@ -211,7 +216,7 @@ Each holding's raw weight is:
 weight_i  ∝  conviction_i  /  max(volatility_i, volatility_floor)
 ```
 
-Weights are normalized, then positions below **$100** per line are pruned unless that would drop below **3** holdings.
+Positions below **$100** are pruned unless that would leave fewer than **3** holdings. Capital is redistributed subject to a **25% of total capital** position ceiling; excess capacity stays in cash. Reported `weight` values are normalized over invested assets, while `portfolio_weight_pct` is relative to total capital.
 
 **Risk-profile tilt** (optional):
 
@@ -332,10 +337,10 @@ Key environment variables (see [config.py](config.py) for the full list):
 | Variable | Default | Description |
 |---|---|---|
 | `QPL_MIN_INVESTMENT` | `5000` | Minimum investment (USD) |
-| `QPL_VOLATILITY_FLOOR` | `0.08` | Floor on vol used in sizing |
+| `QPL_VOL_FLOOR` | `0.08` | Floor on vol used in sizing |
 | `QPL_DRIFT_THRESHOLD_PCT` | `5.0` | Rebalancing drift threshold |
-| `QPL_PORTFOLIO_VAR_LIMIT_PCT` | `2.5` | VaR breach threshold |
-| `QPL_MAX_SINGLE_POSITION_PCT` | `25.0` | Max single-position weight |
+| `QPL_VAR_LIMIT_PCT` | `2.5` | VaR breach threshold |
+| `QPL_MAX_POSITION_PCT` | `25.0` | Max initial single-position share of total capital |
 | `QPL_DEMO_MODE` | `0` | When `1`, use synthetic prices instead of live APIs |
 | `QPL_PORT` | `8080` | HTTP port |
 
@@ -347,7 +352,7 @@ Key environment variables (see [config.py](config.py) for the full list):
 ./run_tests.sh
 ```
 
-Runs `pytest` with coverage (55 tests, ~65% coverage). The test runner enables demo mode internally so CI does not depend on market APIs.
+Runs `pytest` with coverage and numerical regression checks. CI repeats the suite on Python 3.11 and 3.12; its badge reports the latest remote run. The test runner enables demo mode internally so CI does not depend on market APIs.
 
 ---
 

@@ -236,7 +236,7 @@
                     </div>
 
                     <article class="analysis-panel action-plan-panel reveal-target" id="actionPlanPanel" style="display:none;">
-                        <h2 class="section-heading">Action Plan</h2>
+                        <h2 class="section-heading">Allocation Illustration</h2>
                         <p class="panel-subtitle" id="actionPlanSummary"></p>
                         <ol class="action-plan-list" id="actionPlanList"></ol>
                         <p class="panel-subtitle action-plan-hint" id="actionPlanHint"></p>
@@ -297,7 +297,8 @@
                         </article>
 
                         <article class="analysis-panel reveal-target">
-                            <h2 class="section-heading">Backtest (1Y / 3Y / 5Y)</h2>
+                            <h2 class="section-heading">Historical Replay (1Y / 3Y / 5Y)</h2>
+                            <p class="panel-subtitle">Today's holdings and weights applied to past prices. This includes hindsight and selection bias; it is not an independently tested trading strategy.</p>
                             <p class="panel-subtitle" id="backtestConfigText"></p>
                             <div class="backtest-grid" id="backtestGrid"></div>
                         </article>
@@ -350,7 +351,7 @@
                 <!-- ===================== WHAT-IF TAB ===================== -->
                 <div class="tab-pane" data-tab-pane="whatif" role="tabpanel" hidden>
                     <article class="analysis-panel reveal-target">
-                        <h2 class="section-heading">Monte Carlo Simulation (1Y Forecast)</h2>
+                        <h2 class="section-heading">Historical Scenarios (1Y)</h2>
                         <p class="panel-subtitle" id="monteCarloStatus"></p>
                         <canvas id="monteCarloChart"></canvas>
                         <div class="quality-grid" id="monteCarloStats"></div>
@@ -359,7 +360,7 @@
                     <section class="analysis-grid">
                         <article class="analysis-panel goal-tracker-panel reveal-target" id="goalTrackerPanel">
                             <h2 class="section-heading">Goal Tracker</h2>
-                            <p class="panel-subtitle">Set a target value and date — we'll estimate the probability of getting there using your portfolio's Monte Carlo distribution.</p>
+                            <p class="panel-subtitle">Explore an illustrative lognormal model using historical averages. This is a separate model from the scenario chart; its probabilities have not been calibrated to future outcomes.</p>
                             <form class="goal-form" id="goalTrackerForm">
                                 <div class="goal-form-row">
                                     <label for="goalTargetValue">Target value (USD)</label>

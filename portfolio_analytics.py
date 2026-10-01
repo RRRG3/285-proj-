@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config import settings
+
 
 @dataclass
 class BacktestConfig:
@@ -17,12 +19,25 @@ class BacktestConfig:
     risk_free_rate_annual: float = 0.02
     drift_threshold_pct: float = 5.0
 
+    def __post_init__(self):
+        if not np.isfinite(self.transaction_cost_bps) or not 0 <= self.transaction_cost_bps < 10000:
+            raise ValueError("Transaction costs must be finite and between 0 and 10000 bps.")
+        if self.rebalance_frequency not in {"none", "daily", "weekly", "monthly", "quarterly", "yearly"}:
+            raise ValueError("Unsupported rebalance frequency.")
+        if not np.isfinite(self.risk_free_rate_annual) or self.risk_free_rate_annual <= -1:
+            raise ValueError("Invalid annual risk-free rate.")
+
 
 class PortfolioAnalytics:
     def __init__(self, data_fetcher):
         self.data_fetcher = data_fetcher
         self.default_horizons = [1, 3, 5]
-        self.default_config = BacktestConfig()
+        self.default_config = BacktestConfig(
+            transaction_cost_bps=settings.analytics.transaction_cost_bps,
+            rebalance_frequency=settings.analytics.rebalance_frequency,
+            risk_free_rate_annual=settings.analytics.risk_free_rate_annual,
+            drift_threshold_pct=settings.analytics.drift_threshold_pct,
+        )
 
     def run_full_analysis(self, portfolio, horizons=None, config=None):
         """Run benchmark comparison, backtests, rebalance, correlation, sector, and Monte Carlo."""
@@ -48,6 +63,8 @@ class PortfolioAnalytics:
                 backtest_rows.append(
                     {
                         "period": label,
+                        "research_status": period_result["research_status"],
+                        "observations": period_result["observations"],
                         "start_date": period_result["start_date"],
                         "end_date": period_result["end_date"],
                         "portfolio_end_value": period_result["portfolio"]["end_value"],
@@ -82,6 +99,13 @@ class PortfolioAnalytics:
         }
 
         backtest_payload = {
+            "research_status": "historical_replay",
+            "methodology": "Current holdings and weights replayed historically; not an out-of-sample strategy test.",
+            "limitations": [
+                "Today's security selection and estimated weights introduce selection and look-ahead bias.",
+                "No point-in-time universe, delisted securities, or independently held-out strategy evaluation.",
+                "Cash earns zero; taxes, borrow fees and market impact beyond the flat cost assumption are excluded.",
+            ],
             "configuration": {
                 "transaction_cost_bps": config.transaction_cost_bps,
                 "rebalance_frequency": config.rebalance_frequency,
@@ -119,9 +143,12 @@ class PortfolioAnalytics:
         if not allocations:
             return {"status": "insufficient_data", "reason": "No allocations available."}
 
-        end_date = date.today()
-        # Extra buffer helps with non-trading days and sparse symbols.
-        start_date = end_date - timedelta(days=years * 366 + 45)
+        if not isinstance(years, int) or years < 1:
+            raise ValueError("Horizon must be a positive whole number of years.")
+        # Exclude today's potentially incomplete daily candle.
+        end_date = date.today() - timedelta(days=1)
+        requested_start = pd.Timestamp(date.today()) - pd.DateOffset(years=years)
+        start_date = requested_start.date() - timedelta(days=7)
 
         holding_tickers = [allocation["ticker"] for allocation in allocations]
         benchmark_tickers = ["SPY", "AGG"]
@@ -137,40 +164,37 @@ class PortfolioAnalytics:
                 "quality_warnings": ["Historical price matrix is empty."],
             }
 
-        quality_warnings = []
+        price_frame = price_frame.loc[
+            (price_frame.index >= requested_start) & (price_frame.index <= pd.Timestamp(end_date))
+        ]
+        quality_warnings = [
+            "Historical replay of current holdings; selection and look-ahead bias are not removed."
+        ]
         for ticker, metadata in quality_map.items():
             if metadata.get("source") == "unavailable":
                 quality_warnings.append(f"{ticker}: no historical source available.")
             elif metadata.get("source") == "stooq_csv":
-                quality_warnings.append(f"{ticker}: fallback source used (Stooq).")
+                quality_warnings.append(f"{ticker}: Stooq fallback; corporate-action adjustment basis is unverified.")
+            elif metadata.get("source") == "demo_mode_synthetic":
+                quality_warnings.append(f"{ticker}: synthetic demo history; not market evidence.")
 
-        weights = {}
-        for allocation in allocations:
-            ticker = allocation["ticker"]
-            if ticker in price_frame.columns and price_frame[ticker].dropna().shape[0] >= 40:
-                weights[ticker] = float(allocation.get("weight", 0.0))
-
-        if not weights:
+        weights = {a["ticker"]: float(a.get("weight", 0)) for a in allocations}
+        if (len(weights) != len(allocations) or not weights
+                or any(not np.isfinite(w) or w < 0 for w in weights.values())
+                or sum(weights.values()) <= 0):
+            return {"status": "insufficient_data", "reason": "Invalid or duplicate portfolio weights."}
+        portfolio_prices = self._prepare_price_slice(price_frame, list(weights))
+        expected_days = len(pd.bdate_range(requested_start, end_date))
+        complete_horizon = (
+            not portfolio_prices.empty
+            and len(portfolio_prices) >= max(40, int(expected_days * .9))
+            and (portfolio_prices.index[0] - requested_start).days <= 7
+            and (pd.Timestamp(end_date) - portfolio_prices.index[-1]).days <= 7
+        )
+        if not complete_horizon:
             return {
                 "status": "insufficient_data",
-                "reason": "No holdings have enough history for the selected horizon.",
-                "quality_warnings": quality_warnings,
-            }
-
-        total_weight = sum(weights.values())
-        if total_weight <= 0:
-            return {
-                "status": "insufficient_data",
-                "reason": "Invalid target weights after filtering.",
-                "quality_warnings": quality_warnings,
-            }
-        weights = {ticker: weight / total_weight for ticker, weight in weights.items()}
-
-        portfolio_prices = self._prepare_price_slice(price_frame, list(weights.keys()))
-        if portfolio_prices.empty or portfolio_prices.shape[0] < 40:
-            return {
-                "status": "insufficient_data",
-                "reason": "Insufficient aligned portfolio history.",
+                "reason": "Complete, finite, positive history for every holding is required across the requested horizon.",
                 "quality_warnings": quality_warnings,
             }
 
@@ -187,45 +211,45 @@ class PortfolioAnalytics:
         )
 
         # Benchmark 1: SPY (S&P 500 proxy)
-        spy_prices = self._prepare_price_slice(price_frame, ["SPY"])
+        spy_prices = self._prepare_price_slice(price_frame.reindex(portfolio_prices.index), ["SPY"])
         spy_metrics = None
         spy_returns = pd.Series(dtype="float64")
         if not spy_prices.empty and spy_prices.shape[0] >= 40:
             spy_values, _ = self._simulate_rebalanced_portfolio(
                 prices=spy_prices,
                 target_weights={"SPY": 1.0},
-                transaction_cost_rate=0.0,
+                transaction_cost_rate=config.transaction_cost_bps / 10000.0,
                 rebalance_frequency="none",
                 cash_ratio=0.0,
             )
             spy_metrics = self._performance_metrics(
                 spy_values, risk_free_rate_annual=config.risk_free_rate_annual
             )
-            spy_returns = spy_values.pct_change().dropna()
+            spy_returns = self._net_period_returns(spy_values)
         else:
             quality_warnings.append("SPY benchmark unavailable for this horizon.")
 
         # Benchmark 2: 60/40 SPY + AGG
         sixty_weights = {"SPY": 0.6, "AGG": 0.4}
-        sixty_prices = self._prepare_price_slice(price_frame, list(sixty_weights.keys()))
+        sixty_prices = self._prepare_price_slice(price_frame.reindex(portfolio_prices.index), list(sixty_weights.keys()))
         sixty_metrics = None
         sixty_returns = pd.Series(dtype="float64")
         if not sixty_prices.empty and sixty_prices.shape[0] >= 40:
             sixty_values, _ = self._simulate_rebalanced_portfolio(
                 prices=sixty_prices,
                 target_weights=sixty_weights,
-                transaction_cost_rate=0.0,
+                transaction_cost_rate=config.transaction_cost_bps / 10000.0,
                 rebalance_frequency="monthly",
                 cash_ratio=0.0,
             )
             sixty_metrics = self._performance_metrics(
                 sixty_values, risk_free_rate_annual=config.risk_free_rate_annual
             )
-            sixty_returns = sixty_values.pct_change().dropna()
+            sixty_returns = self._net_period_returns(sixty_values)
         else:
             quality_warnings.append("60/40 benchmark unavailable for this horizon.")
 
-        portfolio_returns = portfolio_values.pct_change().dropna()
+        portfolio_returns = self._net_period_returns(portfolio_values)
         if not spy_returns.empty:
             portfolio_alpha_beta = self._alpha_beta(
                 strategy_returns=portfolio_returns,
@@ -255,6 +279,8 @@ class PortfolioAnalytics:
 
         return {
             "status": "ok",
+            "research_status": "historical_replay",
+            "observations": len(portfolio_prices),
             "start_date": portfolio_prices.index.min().strftime("%Y-%m-%d"),
             "end_date": portfolio_prices.index.max().strftime("%Y-%m-%d"),
             "portfolio": {
@@ -281,17 +307,20 @@ class PortfolioAnalytics:
         cash_remainder = float(portfolio.get("cash_remainder", 0.0))
         if total_value <= 0:
             return 0.0
-        return max(0.0, min(0.5, cash_remainder / total_value))
+        return max(0.0, min(1.0, cash_remainder / total_value))
 
     @staticmethod
     def _prepare_price_slice(price_frame, tickers):
         if not tickers:
             return pd.DataFrame()
-        available = [ticker for ticker in tickers if ticker in price_frame.columns]
-        if not available:
+        if any(ticker not in price_frame.columns for ticker in tickers):
             return pd.DataFrame()
-        frame = price_frame[available].copy().sort_index()
-        frame = frame.ffill().dropna(how="any")
+        frame = price_frame[tickers].copy().sort_index()
+        # Do not invent flat returns or drop a held security to improve coverage.
+        if (frame.empty or frame.index.has_duplicates
+                or not np.isfinite(frame.to_numpy(dtype=float)).all()
+                or (frame <= 0).any().any()):
+            return pd.DataFrame()
         return frame
 
     @staticmethod
@@ -327,75 +356,73 @@ class PortfolioAnalytics:
                 "rebalance_count": 0,
             }
 
-        tickers = list(target_weights.keys())
-        prices = prices[tickers].copy()
-        prices = prices.ffill().dropna()
-        if prices.empty:
-            return pd.Series(dtype="float64"), {
-                "transaction_cost_paid_pct": 0.0,
-                "turnover_pct": 0.0,
-                "rebalance_count": 0,
-            }
-
-        weights = np.array([target_weights[ticker] for ticker in tickers], dtype=float)
-        weight_sum = weights.sum()
-        if weight_sum <= 0:
-            weights = np.ones_like(weights) / len(weights)
-        else:
-            weights = weights / weight_sum
-
-        returns = prices.pct_change().fillna(0.0)
-        invested_initial = 1.0 - cash_ratio
-        initial_cost = invested_initial * transaction_cost_rate
-        invested_after_cost = max(0.0, invested_initial - initial_cost)
-        holding_values = invested_after_cost * weights
+        if (not np.isfinite(transaction_cost_rate) or not 0 <= transaction_cost_rate < 1
+                or not np.isfinite(cash_ratio) or not 0 <= cash_ratio <= 1):
+            raise ValueError("Invalid transaction cost or cash fraction.")
+        if rebalance_frequency not in {"none", "daily", "weekly", "monthly", "quarterly", "yearly"}:
+            raise ValueError("Unsupported rebalance frequency.")
+        tickers = list(target_weights)
+        clean = self._prepare_price_slice(prices, tickers)
+        if clean.empty:
+            raise ValueError("Prices must be complete, finite, positive and uniquely dated.")
+        prices = clean
+        weights = np.array([target_weights[t] for t in tickers], dtype=float)
+        if not np.isfinite(weights).all() or (weights < 0).any() or weights.sum() <= 0:
+            raise ValueError("Weights must be finite, nonnegative and sum to a positive value.")
+        weights /= weights.sum()
+        # Fees are charged on actual buy/sell notional. Solve the cash budget exactly.
         cash_value = cash_ratio
-
-        total_values = [holding_values.sum() + cash_value]
-        turnover_value = invested_initial
-        transaction_cost_value = initial_cost
+        initial_notional = (1 - cash_ratio) / (1 + transaction_cost_rate)
+        holding_values = initial_notional * weights
+        transaction_cost_value = initial_notional * transaction_cost_rate
+        gross_traded = initial_notional
+        total_values = [float(holding_values.sum() + cash_value)]
         rebalance_count = 0
-
-        for idx in range(1, len(returns.index)):
-            day_returns = returns.iloc[idx].to_numpy(dtype=float)
-            holding_values = holding_values * (1.0 + day_returns)
-            invested_value = float(holding_values.sum())
-
-            previous_date = returns.index[idx - 1]
-            current_date = returns.index[idx]
-
-            if self._should_rebalance(previous_date, current_date, rebalance_frequency):
-                current_weights = (
-                    holding_values / invested_value if invested_value > 0 else weights
-                )
-                # Turnover is half of the L1 distance between weight vectors.
-                trade_value = float(0.5 * np.abs(weights - current_weights).sum() * invested_value)
-                trade_cost = trade_value * transaction_cost_rate
-
-                if trade_value > 0:
-                    invested_value = max(0.0, invested_value - trade_cost)
-                    holding_values = invested_value * weights
-                    transaction_cost_value += trade_cost
-                    turnover_value += trade_value
+        returns = prices.pct_change(fill_method=None)
+        for idx in range(1, len(prices)):
+            holding_values *= 1 + returns.iloc[idx].to_numpy(dtype=float)
+            invested = float(holding_values.sum())
+            if self._should_rebalance(prices.index[idx - 1], prices.index[idx], rebalance_frequency):
+                # Post-fee target holdings H satisfy H + c*sum(abs(H*w-old)) = invested.
+                lo, hi = 0.0, invested
+                for _ in range(60):
+                    mid = (lo + hi) / 2
+                    cost = transaction_cost_rate * np.abs(mid * weights - holding_values).sum()
+                    if mid + cost > invested:
+                        hi = mid
+                    else:
+                        lo = mid
+                target = ((lo + hi) / 2) * weights
+                traded = float(np.abs(target - holding_values).sum())
+                if traded > 1e-12:
+                    holding_values = target
+                    transaction_cost_value += traded * transaction_cost_rate
+                    gross_traded += traded
                     rebalance_count += 1
-
             total_values.append(float(holding_values.sum() + cash_value))
-
         value_series = pd.Series(total_values, index=prices.index, dtype=float)
-        meta = {
-            "transaction_cost_paid_pct": transaction_cost_value * 100.0,
-            "turnover_pct": turnover_value * 100.0,
+        # Preserve the pre-trade NAV without inventing an additional trading day.
+        value_series.attrs["initial_capital"] = 1.0
+        return value_series, {
+            "transaction_cost_paid_pct": transaction_cost_value * 100,
+            "turnover_pct": gross_traded * 100,
             "rebalance_count": rebalance_count,
         }
-        return value_series, meta
 
     @staticmethod
     def _max_drawdown(value_series):
         if value_series.empty:
             return 0.0
-        running_max = value_series.cummax()
+        running_max = value_series.cummax().clip(lower=value_series.attrs.get("initial_capital", value_series.iloc[0]))
         drawdowns = value_series / running_max - 1.0
         return float(drawdowns.min())
+
+    @staticmethod
+    def _net_period_returns(value_series):
+        returns = value_series.pct_change(fill_method=None).dropna()
+        if not returns.empty and "initial_capital" in value_series.attrs:
+            returns.iloc[0] = float(value_series.iloc[1]) / value_series.attrs["initial_capital"] - 1
+        return returns
 
     def _performance_metrics(self, value_series, risk_free_rate_annual):
         if value_series.empty or value_series.shape[0] < 2:
@@ -403,23 +430,24 @@ class PortfolioAnalytics:
                 "total_return_pct": 0.0,
                 "annual_return_pct": 0.0,
                 "annual_volatility_pct": 0.0,
-                "sharpe": 0.0,
+                "sharpe": None,
                 "max_drawdown_pct": 0.0,
             }
 
-        start_value = float(value_series.iloc[0])
+        start_value = float(value_series.attrs.get("initial_capital", value_series.iloc[0]))
         end_value = float(value_series.iloc[-1])
         total_return = (end_value / start_value - 1.0) if start_value > 0 else 0.0
 
-        daily_returns = value_series.pct_change().dropna()
+        daily_returns = self._net_period_returns(value_series)
         n_days = max(1, daily_returns.shape[0])
         annual_factor = 252.0 / n_days
         annual_return = (end_value / start_value) ** annual_factor - 1.0 if start_value > 0 else 0.0
-        annual_vol = float(daily_returns.std() * np.sqrt(252.0)) if not daily_returns.empty else 0.0
+        annual_vol = float(daily_returns.std() * np.sqrt(252.0)) if len(daily_returns) > 1 else 0.0
 
-        sharpe = 0.0
-        if annual_vol > 0:
-            sharpe = (annual_return - risk_free_rate_annual) / annual_vol
+        sharpe = None
+        if annual_vol > 1e-12:
+            rf_daily = (1 + risk_free_rate_annual) ** (1 / 252) - 1
+            sharpe = float((daily_returns.mean() - rf_daily) * 252 / annual_vol)
 
         max_drawdown = self._max_drawdown(value_series)
 
@@ -427,7 +455,7 @@ class PortfolioAnalytics:
             "total_return_pct": total_return * 100.0,
             "annual_return_pct": annual_return * 100.0,
             "annual_volatility_pct": annual_vol * 100.0,
-            "sharpe": float(sharpe),
+            "sharpe": sharpe,
             "max_drawdown_pct": max_drawdown * 100.0,
         }
 
@@ -435,7 +463,7 @@ class PortfolioAnalytics:
     def _alpha_beta(strategy_returns, market_returns, risk_free_rate_annual):
         aligned = pd.concat([strategy_returns, market_returns], axis=1, join="inner").dropna()
         if aligned.empty or aligned.shape[0] < 5:
-            return {"alpha_pct": 0.0, "beta": 0.0}
+            return {"alpha_pct": None, "beta": None}
 
         aligned.columns = ["strategy", "market"]
         rf_daily = (1.0 + risk_free_rate_annual) ** (1.0 / 252.0) - 1.0
@@ -445,7 +473,7 @@ class PortfolioAnalytics:
         market_var = float(market_excess.var())
 
         if market_var <= 0:
-            return {"alpha_pct": 0.0, "beta": 0.0}
+            return {"alpha_pct": None, "beta": None}
 
         beta = float(strategy_excess.cov(market_excess) / market_var)
         alpha_daily = float(strategy_excess.mean() - beta * market_excess.mean())
@@ -571,7 +599,7 @@ class PortfolioAnalytics:
             return {"status": "insufficient_holdings", "tickers": [], "matrix": []}
 
         tickers = [a["ticker"] for a in allocations if a.get("ticker")]
-        end_date = date.today()
+        end_date = date.today() - timedelta(days=1)
         start_date = end_date - timedelta(days=400)
         frame, _ = self.data_fetcher.get_price_history_frame(tickers, start_date, end_date)
         if frame.empty:
@@ -581,7 +609,7 @@ class PortfolioAnalytics:
         if len(available) < 2:
             return {"status": "insufficient_data", "tickers": available, "matrix": []}
 
-        returns = frame[available].pct_change().dropna()
+        returns = frame[available].where(np.isfinite(frame[available]) & (frame[available] > 0)).pct_change(fill_method=None).dropna()
         if returns.shape[0] < 20:
             return {"status": "insufficient_data", "tickers": available, "matrix": []}
 
@@ -634,7 +662,7 @@ class PortfolioAnalytics:
             return {"status": "insufficient_holdings"}
 
         tickers = [a["ticker"] for a in allocations if a.get("ticker")]
-        end_date = date.today()
+        end_date = date.today() - timedelta(days=1)
         start_date = end_date - timedelta(days=500)
         frame, _ = self.data_fetcher.get_price_history_frame(tickers, start_date, end_date)
         if frame.empty:
@@ -644,14 +672,14 @@ class PortfolioAnalytics:
         if len(available) < 2:
             return {"status": "insufficient_data"}
 
-        aligned = frame[available].ffill().dropna()
+        aligned = self._prepare_price_slice(frame, tickers)
         if aligned.shape[0] < 30:
             return {"status": "insufficient_data"}
 
         returns = aligned.pct_change().dropna()
         daily_mu = returns.mean()
         daily_sigma = returns.std()
-        annual_mu = (1.0 + daily_mu) ** 252.0 - 1.0
+        annual_mu = daily_mu * 252.0
         annual_sigma = daily_sigma * np.sqrt(252.0)
         corr = returns.corr()
 
@@ -676,6 +704,7 @@ class PortfolioAnalytics:
             "risk_free_rate_annual_pct": round(risk_free_rate_annual * 100.0, 4),
             "initial_weights": [round(weight_map.get(t, 0.0), 6) for t in available],
             "history_days": int(aligned.shape[0]),
+            "cash_ratio": self._cash_ratio(portfolio),
         }
 
     # ------------------------------------------------------------------
@@ -694,35 +723,31 @@ class PortfolioAnalytics:
             return {"status": "insufficient_data"}
 
         tickers = [a["ticker"] for a in allocations if a.get("ticker")]
-        end_date = date.today()
+        end_date = date.today() - timedelta(days=1)
         start_date = end_date - timedelta(days=500)
         frame, _ = self.data_fetcher.get_price_history_frame(tickers, start_date, end_date)
         if frame.empty:
             return {"status": "insufficient_data"}
 
-        weights: dict[str, float] = {}
-        for allocation in allocations:
-            t = allocation["ticker"]
-            if t in frame.columns and frame[t].dropna().shape[0] >= 30:
-                weights[t] = float(allocation.get("weight", 0.0))
-
-        if not weights:
+        if not isinstance(simulations, int) or not 1 <= simulations <= 10000:
+            raise ValueError("Simulations must be between 1 and 10000.")
+        if not isinstance(forecast_days, int) or not 1 <= forecast_days <= 2520:
+            raise ValueError("Forecast horizon must be between 1 and 2520 trading days.")
+        weights = {a["ticker"]: float(a.get("weight", 0)) for a in allocations}
+        if (len(weights) != len(allocations) or not weights
+                or any(not np.isfinite(w) or w < 0 for w in weights.values())
+                or sum(weights.values()) <= 0):
             return {"status": "insufficient_data"}
-
-        total_w = sum(weights.values()) or 1.0
-        weights = {t: w / total_w for t, w in weights.items()}
-
-        aligned = frame[list(weights.keys())].ffill().dropna()
-        if aligned.shape[0] < 30:
+        aligned = self._prepare_price_slice(frame, list(weights))
+        if len(aligned) < 60:
             return {"status": "insufficient_data"}
-
-        returns = aligned.pct_change().dropna()
-        port_returns = sum(returns[t] * w for t, w in weights.items())
+        total_weight = sum(weights.values())
+        weights = {t: w / total_weight for t, w in weights.items()}
+        returns = aligned.pct_change(fill_method=None).dropna()
+        cash_ratio = self._cash_ratio(portfolio)
+        port_returns = (1 - cash_ratio) * sum(returns[t] * w for t, w in weights.items())
         mu = float(port_returns.mean())
         sigma = float(port_returns.std())
-
-        if sigma <= 0:
-            return {"status": "insufficient_data"}
 
         current_value = float(portfolio.get("total_value", 0.0) or 0.0)
         if current_value <= 0:
@@ -741,7 +766,14 @@ class PortfolioAnalytics:
         path_matrix = np.zeros((simulations, len(sample_days)))
 
         for sim_idx in range(simulations):
-            daily_shocks = rng.normal(mu, sigma, forecast_days)
+            # Resample contiguous joint-return blocks to retain short-range dependence
+            # and observed tails, rather than assuming independent normal shocks.
+            block_length = min(10, len(port_returns))
+            block_starts = rng.integers(0, len(port_returns) - block_length + 1,
+                                       size=int(np.ceil(forecast_days / block_length)))
+            daily_shocks = np.concatenate([
+                port_returns.to_numpy()[start:start + block_length] for start in block_starts
+            ])[:forecast_days]
             cumulative = np.cumprod(1.0 + daily_shocks)
             path_matrix[sim_idx, 0] = current_value
             for col_idx, day in enumerate(sample_days[1:], start=1):
@@ -761,6 +793,12 @@ class PortfolioAnalytics:
 
         return {
             "status": "ok",
+            "method": "moving_block_bootstrap",
+            "block_length": min(10, len(port_returns)),
+            "seed": 42,
+            "history_observations": len(port_returns),
+            "cash_ratio": cash_ratio,
+            "assumptions": "Constant weights; zero cash yield; no future trading costs. Historical scenarios, not calibrated probabilities.",
             "simulations": simulations,
             "forecast_days": forecast_days,
             "current_value": round(current_value, 2),

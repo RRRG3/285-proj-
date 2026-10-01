@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -82,6 +83,7 @@ class PortfolioTracker:
                     "name": allocation.get("name"),
                     "strategy": allocation.get("strategy"),
                     "asset_type": allocation.get("asset_type", "Stock"),
+                    "sector": allocation.get("sector", "Other"),
                     "rationale": allocation.get("rationale", ""),
                     "conviction": float(allocation.get("conviction", 0.0)),
                     "annualized_volatility": float(allocation.get("annualized_volatility", 0.0)),
@@ -121,9 +123,12 @@ class PortfolioTracker:
         if not history_map:
             return {"dates": [], "values": []}
 
-        date_set = set()
-        for ticker_history in history_map.values():
-            date_set.update(ticker_history.keys())
+        date_sets = [
+            {day for day, value in history_map.get(ticker, {}).items()
+             if isinstance(value, (int, float)) and math.isfinite(value) and value > 0}
+            for ticker in tickers
+        ]
+        date_set = set.intersection(*date_sets) if date_sets else set()
 
         dates = sorted(date_set)[-days:]
         values = []
@@ -134,9 +139,7 @@ class PortfolioTracker:
             for allocation in allocations:
                 ticker = allocation["ticker"]
                 ticker_history = history_map.get(ticker, {})
-                close_price = self._get_close_on_or_before(ticker_history, date_label)
-                if close_price is None:
-                    close_price = allocation.get("price", 0.0)
+                close_price = ticker_history[date_label]
                 day_total += allocation["shares"] * close_price
             values.append(round(day_total, 2))
 
@@ -159,9 +162,12 @@ class PortfolioTracker:
         if not history_map:
             return {"dates": [], "portfolio": [], "sp500": [], "sixty_forty": []}
 
-        date_set = set()
-        for ticker_history in history_map.values():
-            date_set.update(ticker_history.keys())
+        date_sets = [
+            {day for day, value in history_map.get(ticker, {}).items()
+             if isinstance(value, (int, float)) and math.isfinite(value) and value > 0}
+            for ticker in tickers
+        ]
+        date_set = set.intersection(*date_sets) if date_sets else set()
         dates = sorted(date_set)[-days:]
         if not dates:
             return {"dates": [], "portfolio": [], "sp500": [], "sixty_forty": []}
@@ -173,9 +179,7 @@ class PortfolioTracker:
             for allocation in allocations:
                 ticker = allocation["ticker"]
                 ticker_history = history_map.get(ticker, {})
-                close_price = self._get_close_on_or_before(ticker_history, date_label)
-                if close_price is None:
-                    close_price = allocation.get("current_price", allocation.get("price", 0.0))
+                close_price = ticker_history[date_label]
                 day_total += float(allocation.get("shares", 0.0)) * float(close_price)
             portfolio_values.append(float(day_total))
 
@@ -185,6 +189,11 @@ class PortfolioTracker:
         if base_value <= 0:
             base_value = 1.0
 
+        # All comparison lines must share the same initial capital and first date.
+        if not portfolio_values or portfolio_values[0] <= 0:
+            return {"dates": [], "portfolio": [], "sp500": [], "sixty_forty": []}
+        scale = base_value / portfolio_values[0]
+        portfolio_values = [value * scale for value in portfolio_values]
         spy_history = history_map.get("SPY", {})
         agg_history = history_map.get("AGG", {})
         spy_initial = self._get_close_on_or_before(spy_history, dates[0]) or 0.0

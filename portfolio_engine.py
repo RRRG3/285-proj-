@@ -1,6 +1,9 @@
 """Core portfolio allocation and valuation logic."""
 
 import concurrent.futures
+import math
+
+from config import settings
 
 from data_fetcher import StockDataFetcher
 
@@ -8,14 +11,17 @@ from data_fetcher import StockDataFetcher
 class PortfolioEngine:
     def __init__(self):
         self.data_fetcher = StockDataFetcher()
-        self.min_investment = 5000.0
+        self.min_investment = settings.portfolio.min_investment
+        self.max_position_fraction = settings.risk.max_single_position_pct / 100
+        if not 0 < self.max_position_fraction <= 1:
+            raise ValueError("Position cap must be in (0, 100].")
         self.min_per_stock = 100.0
         self.default_annualized_volatility = 0.30
         self.volatility_floor = 0.08
 
     def validate_investment(self, amount):
         """Validate that amount meets minimum project requirement."""
-        if amount < self.min_investment:
+        if not math.isfinite(amount) or amount < self.min_investment:
             return False, f"Minimum investment is ${self.min_investment:,.2f}"
         return True, None
 
@@ -37,12 +43,15 @@ class PortfolioEngine:
         for stock in stocks:
             ticker = stock["ticker"]
             price = prices.get(ticker)
-            if price is None:
+            if price is None or not math.isfinite(price) or price <= 0:
                 continue
 
             conviction = float(stock.get("conviction", 0.75))
             raw_volatility = volatility_map.get(ticker)
-            annualized_volatility = raw_volatility or self.default_annualized_volatility
+            estimated_volatility = raw_volatility is None or not math.isfinite(raw_volatility) or raw_volatility <= 0
+            annualized_volatility = self.default_annualized_volatility if estimated_volatility else raw_volatility
+            if not math.isfinite(conviction) or conviction <= 0:
+                continue
             adjusted_volatility = max(annualized_volatility, self.volatility_floor)
             raw_score = conviction / adjusted_volatility
 
@@ -53,6 +62,7 @@ class PortfolioEngine:
                     "conviction": conviction,
                     "annualized_volatility": annualized_volatility,
                     "raw_score": raw_score,
+                    "volatility_is_default": estimated_volatility,
                 }
             )
 
@@ -134,11 +144,34 @@ class PortfolioEngine:
             modeled_assets.sort(key=lambda item: item["weight"])
             modeled_assets.pop(0)
 
+        cap_dollars = amount * self.max_position_fraction
+        remaining = min(investable_amount, len(modeled_assets) * cap_dollars)
+        active = list(range(len(modeled_assets)))
+        targets = [0.0] * len(modeled_assets)
+        while active:
+            score_sum = sum(modeled_assets[i]["raw_score"] for i in active)
+            proposals = {i: remaining * modeled_assets[i]["raw_score"] / score_sum for i in active}
+            capped = [i for i in active if proposals[i] > cap_dollars]
+            if not capped:
+                for i in active:
+                    targets[i] = proposals[i]
+                break
+            for i in capped:
+                targets[i] = cap_dollars
+                remaining -= cap_dollars
+                active.remove(i)
+        total_target = sum(targets)
+        if total_target <= 0:
+            return None
+        for asset, target in zip(modeled_assets, targets):
+            asset["target_cost"] = target
+            asset["weight"] = target / total_target
+
         allocations = []
         total_allocated = 0.0
 
         for asset in modeled_assets:
-            target_cost = investable_amount * asset["weight"]
+            target_cost = asset["target_cost"]
             shares = target_cost / asset["price"]
             actual_cost = shares * asset["price"]
             total_allocated += actual_cost
@@ -158,6 +191,8 @@ class PortfolioEngine:
                     "shares": shares,
                     "price": asset["price"],
                     "cost": actual_cost,
+                    "portfolio_weight_pct": actual_cost / amount * 100,
+                    "volatility_is_default": asset.get("volatility_is_default", False),
                 }
             )
 
@@ -168,7 +203,12 @@ class PortfolioEngine:
             "total_allocated": total_allocated,
             "cash_remainder": cash_remainder,
             "total_value": total_allocated + cash_remainder,
-            "allocation_method": "Conviction-weighted inverse-volatility model",
+            "allocation_method": "Position-capped conviction-weighted inverse-volatility model",
+            "position_limit_pct": self.max_position_fraction * 100,
+            "allocation_notes": [
+                "Conviction scores are subjective inputs, not calibrated probabilities.",
+                "Position limits apply to total capital; unused capacity remains cash.",
+            ],
         }
         if risk_score is not None:
             result["risk_profile"] = {
